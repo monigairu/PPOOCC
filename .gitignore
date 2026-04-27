@@ -1,0 +1,24 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environments
+.venv
+# 環境変数（秘密情報）
+.env
+
+# # キャッシュファイル
+# data/form_generation/cache/
+
+# # 出力ファイル
+# data/form_generation/output/
+
+# # Excelテンプレート（機密の可能性）
+# data/form_generation/input/templates/
+
+# macOSシステムファイル
+.DS_Store

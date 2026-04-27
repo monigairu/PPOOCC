@@ -1,0 +1,50 @@
+sheet_name: MRC1
+title: 計実_様式2_PBG_工事概要①
+
+field_aliases:
+  計画実績区分:
+    - 計画/実績
+  炉型:
+    - 炉型
+    - 原子炉型式
+  電力会社:
+    - 電力会社
+    - 事業者
+
+sections:
+  - name: 基本情報1
+    type: label_value
+    description: ラベル列B、入力列C の1対1対応
+    label_column: B
+    value_column: C
+    rows: [4, 5, 6, 7, 8]
+    fields:
+      年度:           C4
+      電力会社:       C5
+      工事件名:       C6
+      炉型:           C7
+      計画実績区分:   C8
+
+  - name: 基本情報2
+    type: plan_actual
+    description: ラベル列E、計画列G、実績列K の1対多対応
+    label_column: E
+    plan_column: G
+    actual_column: K
+    rows: [5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20]
+    fields:
+      件名:           {plan: F5,  actual: K5}
+      対象費目1:      {plan: F6,  actual: K6}
+      対象費目2:      {plan: F7,  actual: K7}
+      発電所名:       {plan: F8,  actual: K8}
+      炉型:           {plan: F9,  actual: K9}
+      工期開始日:     {plan: F10, actual: K10}
+      工期終了日:     {plan: F11, actual: K11}
+      全体工期開始日: {plan: F12, actual: K12}
+      全体工期終了日: {plan: F13, actual: K13}
+      対象号炉1:      {plan: F14, actual: K14}
+      対象号炉2:      {plan: F15, actual: K15}
+      対象号炉3:      {plan: F16, actual: K16}
+      対象号炉4:      {plan: F17, actual: K17}
+      総額:           {plan: F18, actual: K18}
+      全体支払い対象金額: {plan: F19, actual: K19}
