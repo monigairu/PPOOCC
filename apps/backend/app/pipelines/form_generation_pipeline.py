@@ -7,18 +7,20 @@ JSON データを入力として、Excel テンプレートに値を転記し、
 import json
 from pathlib import Path
 
-from src.agents.cell_locator.cell_locator_agent import determine_cell_mapping
-from src.core.cache_manager import (
+from apps.backend.app.agents.cell_locator.cell_locator_agent import determine_cell_mapping
+from apps.backend.app.core.cache_manager import (
     get_template_hash,
     load_mapping_cache,
     save_mapping_cache,
 )
-from src.core.cell_writer import write_to_cell
-from src.core.excel_io import (
+from apps.backend.app.core.cell_writer import write_to_cell
+from apps.backend.app.core.excel_io import (
     copy_excel_file,
     load_workbook_file,
     save_workbook_file,
 )
+from apps.backend.app.core.frame_config_loader import load_frame_config
+from apps.backend.app.section_handlers.tabular_handler import write_tabular_section
 
 
 def run_form_generation(
@@ -27,25 +29,17 @@ def run_form_generation(
     result_excel_path: str,
     cache_path: str,
     sheet_name: str,
-    frame_name: str = "frameB",    # ← 追加
+    frame_name: str = "frameB",
 ) -> None:
     """
     様式自動作成のメインフロー。
-
-    Args:
-        source_json_path: 入力 JSON ファイルのパス
-        template_excel_path: テンプレート Excel ファイルのパス
-        result_excel_path: 出力先 Excel ファイルのパス
-        cache_path: マッピングキャッシュファイルのパス
-        sheet_name: 処理対象のシート名
-        frame_name: 様式名（デフォルト: "frameB"）
     """
     print("=== 様式自動作成パイプライン ===\n")
 
     # 1. JSON データの読み込み
     print("1. 入力 JSON データを読み込み中...")
     with open(source_json_path, "r", encoding="utf-8") as f:
-        input_data: dict[str, str] = json.load(f)
+        input_data: dict = json.load(f)
     print(f"   読み込んだデータ: {input_data}\n")
 
     # 2. Excel テンプレートのコピー
@@ -75,14 +69,18 @@ def run_form_generation(
             input_data,
             workbook,
             sheet_name,
-            frame_name=frame_name,    # ← 追加
+            frame_name=frame_name,
         )
         save_mapping_cache(cache_path, template_hash, mappings)
     print()
 
-    # 5. マッピング結果に基づいて値を書き込み
-    print("5. 判定結果に基づいて値を書き込み中...")
+    # 5. 通常フィールドの書き込み（キーと値が単純な文字列のもの）
+    print("5. 通常フィールドを書き込み中...")
     for key, value in input_data.items():
+        # リスト型（表形式データ）はスキップ
+        if isinstance(value, list):
+            continue
+
         cell_addresses = mappings.get(key, [])
 
         if isinstance(cell_addresses, str):
@@ -102,8 +100,24 @@ def run_form_generation(
             else:
                 print(f"   ❌ {key} ({value}) → {cell_address} 書き込み失敗")
 
-    # 6. 結果の保存
-    print(f"\n6. 結果を保存中...")
+    # 6. 表形式セクションの書き込み
+    print("\n6. 表形式セクションを書き込み中...")
+    try:
+        config = load_frame_config(frame_name, sheet_name)
+        for section in config.get("sections", []):
+            if section.get("type") == "tabular":
+                print(f"   セクション: {section['name']}")
+                write_tabular_section(
+                    workbook,
+                    sheet_name,
+                    section,
+                    input_data,
+                )
+    except FileNotFoundError:
+        print("   YAML定義なし → スキップ")
+
+    # 7. 結果の保存
+    print(f"\n7. 結果を保存中...")
     save_workbook_file(workbook, result_excel_path)
     print(f"   保存完了: {result_excel_path}")
 

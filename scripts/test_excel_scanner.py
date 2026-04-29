@@ -6,8 +6,8 @@ excel_scanner.py の動作確認用スクリプト
 """
 import json
 
-from src.core.excel_io import load_workbook_file
-from src.core.excel_scanner import scan_label_cells
+from apps.backend.app.core.excel_io import load_workbook_file
+from apps.backend.app.core.excel_scanner import scan_label_cells
 
 
 def main():

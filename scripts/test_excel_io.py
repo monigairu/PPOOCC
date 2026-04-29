@@ -4,12 +4,12 @@ excel_io.py と cell_writer.py の動作確認用スクリプト
 使い方:
     python scripts/test_excel_io.py
 """
-from src.core.excel_io import (
+from apps.backend.app.core.excel_io import (
     load_workbook_file,
     save_workbook_file,
     copy_excel_file,
 )
-from src.core.cell_writer import write_to_cell, get_cell_value
+from apps.backend.app.core.cell_writer import write_to_cell, get_cell_value
 
 
 def main():

@@ -9,7 +9,7 @@ import argparse
 
 from dotenv import load_dotenv
 
-from src.pipelines.form_generation_pipeline import run_form_generation
+from apps.backend.app.pipelines.form_generation_pipeline import run_form_generation
 
 
 def main() -> None:

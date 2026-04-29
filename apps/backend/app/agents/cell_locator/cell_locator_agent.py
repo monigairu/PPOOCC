@@ -7,10 +7,10 @@ from pathlib import Path
 
 from openpyxl.workbook.workbook import Workbook
 
-from src.core.ai_client import call_gemini
-from src.core.excel_scanner import scan_label_cells
-from src.core.frame_config_loader import load_frame_config, extract_cell_definitions
-from src.core.skill_loader import load_skill, render_skill
+from apps.backend.app.core.ai_client import call_gemini
+from apps.backend.app.core.excel_scanner import scan_label_cells
+from apps.backend.app.core.frame_config_loader import load_frame_config, extract_cell_definitions
+from apps.backend.app.core.skill_loader import load_skill, render_skill
 
 
 def determine_cell_mapping(

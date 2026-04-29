@@ -27,24 +27,59 @@ sections:
 
   - name: 基本情報2
     type: plan_actual
-    description: ラベル列E、計画列G、実績列K の1対多対応
+    description: ラベル列E、計画列F、実績列K の1対多対応
     label_column: E
     plan_column: G
     actual_column: K
     rows: [5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20]
     fields:
-      件名:           {plan: F5,  actual: K5}
-      対象費目1:      {plan: F6,  actual: K6}
-      対象費目2:      {plan: F7,  actual: K7}
-      発電所名:       {plan: F8,  actual: K8}
-      炉型:           {plan: F9,  actual: K9}
-      工期開始日:     {plan: F10, actual: K10}
-      工期終了日:     {plan: F11, actual: K11}
-      全体工期開始日: {plan: F12, actual: K12}
-      全体工期終了日: {plan: F13, actual: K13}
-      対象号炉1:      {plan: F14, actual: K14}
-      対象号炉2:      {plan: F15, actual: K15}
-      対象号炉3:      {plan: F16, actual: K16}
-      対象号炉4:      {plan: F17, actual: K17}
-      総額:           {plan: F18, actual: K18}
-      全体支払い対象金額: {plan: F19, actual: K19}
+      件名:              {plan: G5,  actual: K5}
+      対象費目1:         {plan: G6,  actual: K6}
+      対象費目2:         {plan: G7,  actual: K7}
+      発電所名:          {plan: G8,  actual: K8}
+      炉型:              {plan: G9,  actual: K9}
+      工期開始日:        {plan: G10, actual: K10}
+      工期終了日:        {plan: G11, actual: K11}
+      全体工期開始日:    {plan: G12, actual: K12}
+      全体工期終了日:    {plan: G13, actual: K13}
+      対象号炉1:         {plan: G14, actual: K14}
+      対象号炉2:         {plan: G15, actual: K15}
+      対象号炉3:         {plan: G16, actual: K16}
+      対象号炉4:         {plan: G17, actual: K17}
+      総額:              {plan: G18, actual: K18}
+      全体支払い対象金額: {plan: G19, actual: K19}
+
+  - name: 実施内容
+    type: plan_actual
+    description: 計画/実績の長文テキスト
+    label_column: E
+    plan_column: G
+    actual_column: K
+    rows: [22, 23, 24, 25]
+    fields:
+      実施内容:       {plan: G22, actual: K22}
+      実施理由:       {plan: G23, actual: K23}
+      実施費用低減策: {plan: G24, actual: K24}
+      説明:           {plan: G25, actual: K25}
+
+  - name: 解体機器表
+    type: tabular
+    description: 解体対象機器の表形式データ
+    header_rows: [27, 28]
+    total_row: 29
+    data_start_row: 30
+    json_key: 解体機器リスト
+    columns:
+      - {name: 対象年度,        column: B}
+      - {name: 分類,            column: C}
+      - {name: 解体機器,        column: D}
+      - {name: 作業区域,        column: E}
+      - {name: 支払い対象可否,   column: F}
+      - {name: 計画_員数,       column: G}
+      - {name: 計画_解体物量,   column: H}
+      - {name: 計画_工数,       column: I}
+      - {name: 計画_費用,       column: J}
+      - {name: 実績_員数,       column: K}
+      - {name: 実績_解体物量,   column: L}
+      - {name: 実績_工数,       column: M}
+      - {name: 実績_費用,       column: N}

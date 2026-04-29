@@ -1,24 +1,37 @@
-# Python-generated files
+# Python
 __pycache__/
-*.py[oc]
+*.py[cod]
+*.pyo
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+coverage.xml
+htmlcov/
+.ipynb_checkpoints/
+
+# Virtual env / env files
+.venv/
+.env
+.env.*
+!.env.example
+
+# IDE / OS
+.vscode/
+.idea/
+.DS_Store
+
+# Logs
+*.log
+
+# Build artifacts
 build/
 dist/
 wheels/
 *.egg-info
 
-# Virtual environments
-.venv
-# 環境変数（秘密情報）
-.env
-
-# # キャッシュファイル
-# data/form_generation/cache/
-
-# # 出力ファイル
-# data/form_generation/output/
-
-# # Excelテンプレート（機密の可能性）
-# data/form_generation/input/templates/
-
-# macOSシステムファイル
-.DS_Store
+# Project data (パスのtypo修正済み)
+data/form_generation/cache/
+data/form_generation/output/
+# テンプレートをGit管理したい場合は次行を削除
+data/form_generation/input/templates/
