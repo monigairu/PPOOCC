@@ -33,5 +33,7 @@ wheels/
 # Project data (パスのtypo修正済み)
 data/form_generation/cache/
 data/form_generation/output/
+data/source/
+data/extracted/
 # テンプレートをGit管理したい場合は次行を削除
 data/form_generation/input/templates/

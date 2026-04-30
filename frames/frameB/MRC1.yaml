@@ -83,3 +83,178 @@ sections:
       - {name: 実績_解体物量,   column: L}
       - {name: 実績_工数,       column: M}
       - {name: 実績_費用,       column: N}
+
+# ─────────────────────────────────────────────
+# data_extractor_agent が参照する抽出スキーマ定義
+# キー名は sample_source.json / cell_locator のキーと完全一致させること
+# ─────────────────────────────────────────────
+extraction_schema:
+
+  # ── 基本情報1 ──────────────────────────────
+  年度:
+    type: string
+    required: true
+    description: "工事対象の年度（例: 2024）"
+    synonyms: [年度, 対象年度, 実施年度, 年]
+
+  電力会社:
+    type: string
+    required: true
+    description: "電力事業者名"
+    synonyms: [電力会社, 事業者, 発注者, お客様, 委託者]
+
+  工事件名:
+    type: string
+    required: true
+    description: "工事または業務の正式名称（基本情報1のヘッダー部分）"
+    synonyms: [工事件名, 工事名称, 工事名, 業務件名]
+
+  炉型:
+    type: string
+    required: true
+    description: "原子炉の型式（例: PWR, BWR）"
+    synonyms: [炉型, 原子炉型式, 炉の種別, リアクター型式]
+
+  計画実績区分:
+    type: enum
+    values: [計画, 実績]
+    required: true
+    description: "この報告が計画値か実績値かの区分"
+    synonyms: [計画実績区分, 計画/実績, 区分, 報告区分]
+
+  # ── 基本情報2 ──────────────────────────────
+  件名:
+    type: string
+    required: true
+    description: "基本情報2の件名。工事件名と同一のことが多い"
+    synonyms: [件名, 工事件名, 工事名称, 業務名, 案件名, 工事名]
+
+  対象費目1:
+    type: string
+    required: false
+    description: "工事費用の費目分類1（例: 施設解体一解体費）"
+    synonyms: [対象費目1, 費目1, 費目, 工事費目, 費用分類]
+
+  対象費目2:
+    type: string
+    required: false
+    description: "工事費用の費目分類2（例: 処理処分一非該当）"
+    synonyms: [対象費目2, 費目2, 費用分類2]
+
+  発電所名:
+    type: string
+    required: true
+    description: "対象の発電所名（例: AA原子力発電所）"
+    synonyms: [発電所名, 発電所, 原子力発電所, サイト名, 事業所名]
+
+  工期開始日:
+    type: date
+    required: true
+    description: "工事の開始年月"
+    synonyms: [工期開始日, 着工日, 開始日, 工事開始, 着手日, 開始予定日, 工期自]
+    date_formats: ["YYYY年MM月", "YYYY/MM", "YYYY-MM", "令和X年MM月"]
+
+  工期終了日:
+    type: date
+    required: true
+    description: "工事の終了年月"
+    synonyms: [工期終了日, 竣工日, 終了日, 工事完了, 完了日, 工期至]
+    date_formats: ["YYYY年MM月", "YYYY/MM", "YYYY-MM", "令和X年MM月"]
+
+  全体工期開始日:
+    type: date
+    required: false
+    description: "複数年度にわたる場合の全体工期の開始年月"
+    synonyms: [全体工期開始日, 全体開始日, 全体着工日, 工事全体開始]
+    date_formats: ["YYYY年MM月", "YYYY/MM", "YYYY-MM", "令和X年MM月"]
+
+  全体工期終了日:
+    type: date
+    required: false
+    description: "複数年度にわたる場合の全体工期の終了年月"
+    synonyms: [全体工期終了日, 全体完了日, 全体竣工日, 工事全体完了]
+    date_formats: ["YYYY年MM月", "YYYY/MM", "YYYY-MM", "令和X年MM月"]
+
+  対象号炉1:
+    type: string
+    required: false
+    description: "対象号炉の1つ目（例: AA1号機）"
+    synonyms: [対象号炉1, 号炉1, 1号炉, 対象炉1]
+
+  対象号炉2:
+    type: string
+    required: false
+    description: "対象号炉の2つ目。対象外の場合は「なし」"
+    synonyms: [対象号炉2, 号炉2, 2号炉, 対象炉2]
+
+  対象号炉3:
+    type: string
+    required: false
+    description: "対象号炉の3つ目。対象外の場合は「なし」"
+    synonyms: [対象号炉3, 号炉3, 3号炉, 対象炉3]
+
+  対象号炉4:
+    type: string
+    required: false
+    description: "対象号炉の4つ目。対象外の場合は「なし」"
+    synonyms: [対象号炉4, 号炉4, 4号炉, 対象炉4]
+
+  総額:
+    type: number
+    required: true
+    unit: 千円
+    description: "当該年度の工事総額（千円単位）"
+    synonyms: [総額, 契約金額, 請負金額, 合計金額, 受注金額, お見積金額, 見積金額]
+    tax_note: "税込/税抜を別途確認要"
+
+  全体支払い対象金額:
+    type: number
+    required: false
+    unit: 千円
+    description: "工事全体の支払い対象総額（千円単位）"
+    synonyms: [全体支払い対象金額, 全体金額, 支払い対象金額, 工事全体金額]
+
+  # ── 実施内容 ───────────────────────────────
+  実施内容:
+    type: text
+    required: false
+    description: "工事の具体的な実施内容（長文）"
+    synonyms: [実施内容, 工事概要, 作業内容, 施工内容, 工事内容]
+
+  実施理由:
+    type: text
+    required: false
+    description: "工事を実施する理由・背景（長文）"
+    synonyms: [実施理由, 工事理由, 実施背景, 施工理由, 工事目的]
+
+  実施費用低減策:
+    type: text
+    required: false
+    description: "費用を低減するために取った施策（長文）"
+    synonyms: [実施費用低減策, 費用低減策, コスト低減, 費用削減策]
+
+  説明:
+    type: text
+    required: false
+    description: "複数号炉にまたがる場合の按分の考え方など補足説明"
+    synonyms: [説明, 備考, 補足, 按分説明, 注記]
+
+  # ── 解体機器表 ─────────────────────────────
+  解体機器リスト:
+    type: list
+    required: false
+    description: "解体対象機器の一覧（表形式）"
+    item_fields:
+      - 対象年度
+      - 分類
+      - 解体機器
+      - 作業区域
+      - 支払い対象可否
+      - 計画_員数
+      - 計画_解体物量
+      - 計画_工数
+      - 計画_費用
+      - 実績_員数
+      - 実績_解体物量
+      - 実績_工数
+      - 実績_費用
