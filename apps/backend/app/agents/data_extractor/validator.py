@@ -4,6 +4,8 @@ Layer 3: バリデーター
 mapper の出力を検証し、以下の処理を行う:
   - 必須フィールドの欠損チェック
   - 型の妥当性チェック（date, number, enum 等）
+  - none_values による「なし」正規化（対象号炉 等）
+  - field_normalizations による表記統一（支払い対象可否 等）
   - 信頼度スコアの検証・補正
   - sample_source.json と同形式の最終 JSON を出力
 
@@ -84,9 +86,10 @@ def validate_and_finalize(
                 field_name, raw_value, field_def
             )
         else:
-            # string, text はそのまま
-            validated_value = str(raw_value).strip()
-            type_warning = None
+            # string / text: none_values による正規化を適用
+            validated_value, type_warning = _validate_string(
+                field_name, raw_value, field_def
+            )
 
         if type_warning:
             warnings.append(type_warning)
@@ -141,6 +144,27 @@ def validate_and_finalize(
         "_metadata": validated_metadata,
         "_validation": validation_summary,
     }
+
+
+def _validate_string(
+    field_name: str, value, field_def: dict
+) -> tuple[str, str | None]:
+    """
+    string / text 型のバリデーション。
+
+    none_values が定義されている場合、該当する値を「なし」に正規化する。
+    例: 「該当なし」「N/A」「-」→「なし」
+    """
+    str_value = str(value).strip()
+    none_values = field_def.get("none_values", [])
+
+    if none_values and str_value in none_values:
+        if str_value != "なし":
+            return "なし", (
+                f"'{field_name}': '{str_value}' を 'なし' に正規化しました"
+            )
+
+    return str_value, None
 
 
 def _validate_enum(
@@ -207,13 +231,44 @@ def _validate_date(
 def _validate_list(
     field_name: str, value, field_def: dict
 ) -> tuple[list | str, str | None]:
-    """list 型のバリデーション。"""
-    if isinstance(value, list):
+    """
+    list 型のバリデーション。
+
+    field_normalizations が定義されている場合、
+    表内の各行・各フィールドの値を正規化する。
+    例: 支払い対象可否「対象」→「支払い対象」、「対象外」→「支払い対象外」
+    """
+    if not isinstance(value, list):
+        return value, (
+            f"'{field_name}': list型が期待されていますが {type(value).__name__} です"
+        )
+
+    normalizations = field_def.get("field_normalizations", {})
+    if not normalizations:
         return value, None
 
-    return value, (
-        f"'{field_name}': list型が期待されていますが {type(value).__name__} です"
-    )
+    normalized_list = []
+    for row in value:
+        if not isinstance(row, dict):
+            normalized_list.append(row)
+            continue
+
+        normalized_row = dict(row)
+        for col_name, rules in normalizations.items():
+            if col_name not in normalized_row:
+                continue
+            cell_value = str(normalized_row[col_name]).strip()
+
+            # 正方向の正規化（例: 「対象」→「支払い対象」）
+            if cell_value in rules.get("synonyms", []):
+                normalized_row[col_name] = rules["canonical"]
+            # 負方向の正規化（例: 「対象外」→「支払い対象外」）
+            elif cell_value in rules.get("synonyms_negative", []):
+                normalized_row[col_name] = rules["canonical_negative"]
+
+        normalized_list.append(normalized_row)
+
+    return normalized_list, None
 
 
 def _load_extraction_schema(frame_name: str, sheet_name: str) -> dict:

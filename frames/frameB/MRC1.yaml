@@ -180,24 +180,28 @@ extraction_schema:
     required: false
     description: "対象号炉の1つ目（例: AA1号機）"
     synonyms: [対象号炉1, 号炉1, 1号炉, 対象炉1]
+    none_values: [なし, 該当なし, N/A, "-", none, "対象外"]
 
   対象号炉2:
     type: string
     required: false
     description: "対象号炉の2つ目。対象外の場合は「なし」"
     synonyms: [対象号炉2, 号炉2, 2号炉, 対象炉2]
+    none_values: [なし, 該当なし, N/A, "-", none, "対象外"]
 
   対象号炉3:
     type: string
     required: false
     description: "対象号炉の3つ目。対象外の場合は「なし」"
     synonyms: [対象号炉3, 号炉3, 3号炉, 対象炉3]
+    none_values: [なし, 該当なし, N/A, "-", none, "対象外"]
 
   対象号炉4:
     type: string
     required: false
     description: "対象号炉の4つ目。対象外の場合は「なし」"
     synonyms: [対象号炉4, 号炉4, 4号炉, 対象炉4]
+    none_values: [なし, 該当なし, N/A, "-", none, "対象外"]
 
   総額:
     type: number
@@ -258,3 +262,10 @@ extraction_schema:
       - 実績_解体物量
       - 実績_工数
       - 実績_費用
+    # field_normalizations: 表内フィールドの値を正規化するルール
+    field_normalizations:
+      支払い対象可否:
+        canonical: "支払い対象"
+        synonyms: [支払い対象, 対象]
+        canonical_negative: "支払い対象外"
+        synonyms_negative: [支払い対象外, 対象外]
