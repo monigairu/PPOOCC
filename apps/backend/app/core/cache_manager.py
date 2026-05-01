@@ -3,26 +3,50 @@
 
 セルマッピングのAI判定結果をキャッシュとして保存し、
 同じテンプレートに対する再判定を回避する。
+
+ハッシュ計算対象:
+  - Excelテンプレートファイル
+  - 様式定義YAMLファイル
+
+どちらかが変わればキャッシュを自動破棄するため、
+手動で rm する必要がなくなる。
 """
 import hashlib
 import json
 from pathlib import Path
 
 
-def get_template_hash(template_path: str) -> str:
+def get_template_hash(
+    template_path: str,
+    yaml_path: str | None = None,
+) -> str:
     """
-    テンプレートファイルの MD5 ハッシュ値を計算する。
+    テンプレートファイルと様式定義YAMLの複合ハッシュ値を計算する。
 
-    テンプレートが変更されたかどうかをハッシュで判定するために使用する。
+    ExcelテンプレートとYAMLの両方が変更検知の対象。
+    どちらかが変わればハッシュが変わり、キャッシュが自動的に無効化される。
 
     Args:
-        template_path: テンプレートファイルのパス
+        template_path: Excelテンプレートファイルのパス
+        yaml_path: 様式定義YAMLファイルのパス（省略時はExcelのみ）
 
     Returns:
         MD5 ハッシュ値（16進数文字列）
     """
+    hasher = hashlib.md5()
+
+    # Excelテンプレートのハッシュ
     with open(template_path, "rb") as f:
-        return hashlib.md5(f.read()).hexdigest()
+        hasher.update(f.read())
+
+    # YAMLファイルのハッシュ（指定された場合）
+    if yaml_path:
+        yaml_file = Path(yaml_path)
+        if yaml_file.exists():
+            with open(yaml_file, "rb") as f:
+                hasher.update(f.read())
+
+    return hasher.hexdigest()
 
 
 def load_mapping_cache(
@@ -32,12 +56,12 @@ def load_mapping_cache(
     """
     キャッシュファイルからマッピングを読み込む。
 
-    キャッシュが存在し、かつテンプレートのハッシュが一致する場合のみ
-    マッピングを返す。一致しない場合は None を返す。
+    キャッシュが存在し、かつハッシュが一致する場合のみ返す。
+    一致しない場合は None を返す（自動的に再判定される）。
 
     Args:
         cache_path: キャッシュファイルのパス
-        template_hash: 現在のテンプレートのハッシュ値
+        template_hash: 現在のテンプレート+YAMLの複合ハッシュ値
 
     Returns:
         マッピング辞書、またはキャッシュ無効時は None
@@ -51,6 +75,7 @@ def load_mapping_cache(
 
     # ハッシュが一致しない場合はキャッシュを無効とみなす
     if cache.get("template_hash") != template_hash:
+        print("   ⚠️  テンプレートまたはYAMLが変更されました。キャッシュを破棄して再判定します")
         return None
 
     print(f"キャッシュからマッピングを読み込みました: {cache_path}")
@@ -67,7 +92,7 @@ def save_mapping_cache(
 
     Args:
         cache_path: キャッシュファイルの保存先パス
-        template_hash: テンプレートのハッシュ値
+        template_hash: テンプレート+YAMLの複合ハッシュ値
         mappings: 保存するマッピング辞書
     """
     cache_file = Path(cache_path)

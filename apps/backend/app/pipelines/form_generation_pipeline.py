@@ -60,7 +60,8 @@ def run_form_generation(
 
     # 4. マッピングの取得（キャッシュ優先）
     print("4. セルマッピングを取得中...")
-    template_hash = get_template_hash(template_excel_path)
+    yaml_path = f"frames/{frame_name}/{sheet_name}.yaml"
+    template_hash = get_template_hash(template_excel_path, yaml_path)
     mappings = load_mapping_cache(cache_path, template_hash)
 
     if mappings is None:
