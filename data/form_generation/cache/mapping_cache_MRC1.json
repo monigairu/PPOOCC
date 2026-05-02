@@ -1,5 +1,5 @@
 {
-  "template_hash": "44a4c4197c3fef58990b806a31666d7c",
+  "template_hash": "f3e551ff9db2ace8fad3d944e2320c78",
   "mappings": {
     "年度": [
       "C4"
@@ -16,8 +16,7 @@
       "K9"
     ],
     "計画実績区分": [
-      "C8",
-      "B9"
+      "C8"
     ],
     "件名": [
       "G5",

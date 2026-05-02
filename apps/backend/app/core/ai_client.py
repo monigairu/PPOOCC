@@ -1,17 +1,20 @@
 """
 Vertex AI 共通クライアント
-
-Vertex AI（Gemini）への呼び出しを抽象化し、
-すべてのエージェントで共通利用できるようにする。
 """
 from google import genai
 
-client = genai.Client(vertexai=True)
+_client = None
+
+
+def _get_client():
+    global _client
+    if _client is None:
+        _client = genai.Client(vertexai=True)
+    return _client
+
 
 def call_gemini(prompt, model_name="gemini-2.5-flash") -> str:
-    """
-    Gemini を呼び出して応答テキストを返す。
-    """
+    client = _get_client()
     response = client.models.generate_content(
         model=model_name,
         contents=prompt
