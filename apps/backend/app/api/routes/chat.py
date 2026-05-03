@@ -34,6 +34,15 @@ def _build_prompt(req: ChatRequest) -> str:
     転記時の根拠をコンテキストとして含めることで、
     AIが具体的な説明をできるようにする。
     """
+    # reasoningにキャッシュ関連の文言が含まれているか判定
+    is_cache_reasoning = "キャッシュ" in req.reasoning
+
+    reasoning_context = (
+        "（この転記はAIが資料を分析した結果です。具体的な資料の箇所は特定できていません）"
+        if is_cache_reasoning
+        else req.reasoning
+    )
+
     return f"""あなたはNuRO（廃炉情報管理システム）の様式自動作成AIアシスタントです。
 電力会社が提出する廃炉関連の様式（Excelファイル）への転記作業を行い、
 その根拠をわかりやすく説明する役割を担っています。
@@ -43,7 +52,7 @@ def _build_prompt(req: ChatRequest) -> str:
 - フィールド名: {req.field_name}
 - セル番地: {req.cell_address}
 - 転記した値: {req.field_value}
-- 転記時のAI判断根拠: {req.reasoning}
+- 転記根拠: {reasoning_context}
 
 ## ユーザーからの質問
 
@@ -52,7 +61,10 @@ def _build_prompt(req: ChatRequest) -> str:
 ## 回答の注意事項
 
 - 上記の転記情報と根拠をもとに、具体的かつ簡潔に回答してください
+- 「キャッシュ」「キャッシュから取得」などシステム内部の用語は絶対に使わないこと
+- 根拠に具体的な資料名・ページ・セクションが含まれている場合はそれを引用して説明すること
+- 根拠が不明・特定できない場合は「この値はAIが資料から判断した結果です。
+  具体的な資料名や箇所についてはアップロードされた資料を直接ご確認ください」と案内すること
 - 専門用語はわかりやすく補足してください
-- 根拠が不明な場合は正直にその旨を伝えてください
 - 回答は日本語で行ってください
 """

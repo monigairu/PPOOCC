@@ -50,8 +50,11 @@ NuRO様式に必要な情報を抽出してJSON形式に変換します。
    - 例: 「工事名称」は「工事件名」の synonym なので一致
    - 見つからなければ `null` をセット（キーは省略しない）
 
-3. **値を抽出し、matched_synonym を記録する**
+3. **値を抽出し、matched_synonym と source_location を記録する**
    - どの表記で一致したかを記録する（後の辞書改善に使う）
+   - source_location には、上記「入力資料の内容」から該当値を見つけた行を
+     そのまま引用して記録する（例: "行15 | 炉型  |  PWR"）
+   - 値が見つからなかった場合は source_location を null にする
 
 4. **表形式データ（解体機器リスト等）は配列として抽出する**
    - 各行を1つのオブジェクトとして、列名をキーにする
@@ -97,7 +100,12 @@ NuRO様式に必要な情報を抽出してJSON形式に変換します。
     "年度": {
       "confidence": 0.95,
       "matched_synonym": "対象年度",
-      "source_location": "シート1, セルB3"
+      "source_location": "行3 | 年度  |  2024"
+    },
+    "炉型": {
+      "confidence": 0.9,
+      "matched_synonym": "炉型",
+      "source_location": "行15 | 炉型  |  PWR"
     },
     "対象費目1": {
       "confidence": 0.0,

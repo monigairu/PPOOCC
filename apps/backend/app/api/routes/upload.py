@@ -1,10 +1,10 @@
 """
 POST /api/upload
 
-アップロードされたファイル（JSON / Excel / Word）を受け取り、
-MRC1への転記を実行してセルごとの根拠を返す。
+アップロードされたファイルを受け取り、NuRO様式を自動生成する。
 
-Excel/Wordの場合は data_extractor で構造化JSONに変換してから転記する。
+このモジュールはファイル受付・データ抽出・HTTPレスポンス構築のみを担当する。
+Excel書き込みの実処理は form_generation_pipeline.generate_form_from_dict() に委譲する。
 """
 import json
 import uuid
@@ -13,23 +13,15 @@ from pathlib import Path
 from fastapi import APIRouter, HTTPException, UploadFile, File, Form
 
 from apps.backend.app.api.models import UploadResponse, CellMapping
-from apps.backend.app.agents.cell_locator.cell_locator_agent import determine_cell_mapping
-from apps.backend.app.agents.data_extractor.data_extractor_agent import extract_data_as_source_json
-from apps.backend.app.core.excel_io import copy_excel_file, load_workbook_file, save_workbook_file
-from apps.backend.app.core.cell_writer import write_to_cell
-from apps.backend.app.core.frame_config_loader import load_frame_config
-from apps.backend.app.core.cache_manager import get_template_hash, load_mapping_cache, save_mapping_cache
-from apps.backend.app.section_handlers.tabular_handler import write_tabular_section
+from apps.backend.app.agents.data_extractor.data_extractor_agent import extract_data
+from apps.backend.app.pipelines.form_generation_pipeline import generate_form_from_dict
 
 router = APIRouter()
 
-# 出力先フォルダ
 OUTPUT_DIR = Path("data/form_generation/output")
 UPLOAD_DIR = Path("data/form_generation/input/uploaded")
 TEMPLATE_PATH = "data/form_generation/input/templates/frameB_MRC.xlsx"
-CACHE_DIR = Path("data/form_generation/cache")
 
-# 対応するファイル形式
 SUPPORTED_EXTENSIONS = {".json", ".xlsx", ".xls", ".docx"}
 
 
@@ -40,14 +32,15 @@ async def upload_and_generate(
     frame_name: str = Form(default="frameB"),
 ):
     """
-    ファイルをアップロードしてExcelへの転記を実行する。
+    ファイルをアップロードしてNuRO様式を自動生成する。
 
     対応形式:
         - .json  → そのまま転記データとして使用
         - .xlsx  → data_extractorでJSONに変換してから転記
         - .docx  → data_extractorでJSONに変換してから転記
+
+    frame_name 配下の全YAML定義シートを処理する。
     """
-    # ── 1. ファイル形式の確認 ──
     filename = file.filename or "unknown"
     suffix = Path(filename).suffix.lower()
 
@@ -57,105 +50,77 @@ async def upload_and_generate(
             detail=f"未対応のファイル形式です: {suffix}。対応形式: {', '.join(SUPPORTED_EXTENSIONS)}"
         )
 
-    # ── 2. ファイルの内容を読み込み ──
     content = await file.read()
 
-    # ── 3. ファイル形式に応じてJSONデータに変換 ──
+    # ── データ抽出 ──────────────────────────────
     try:
         if suffix == ".json":
             input_data = json.loads(content)
+            source_metadata: dict = {}
             print(f"   JSONファイルを直接読み込みました: {filename}")
         else:
-            input_data = _extract_from_file(content, filename, suffix, sheet_name, frame_name)
+            input_data, source_metadata = _extract_from_file(
+                content, filename, suffix, sheet_name, frame_name
+            )
             print(f"   {suffix}ファイルからデータを抽出しました: {filename}")
-
     except json.JSONDecodeError as e:
         raise HTTPException(status_code=400, detail=f"JSONの読み込みに失敗しました: {e}")
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"ファイルの読み込みに失敗しました: {e}")
 
-    # ── 4. セッションIDを生成して出力先を決める ──
+    # ── Excel生成（pipelineに委譲）──────────────
     session_id = str(uuid.uuid4())[:8]
-    result_path = str(OUTPUT_DIR / f"result_{sheet_name}_{session_id}.xlsx")
-    cache_path = str(CACHE_DIR / f"mapping_cache_{sheet_name}.json")
+    result_path = str(OUTPUT_DIR / f"result_{frame_name}_{session_id}.xlsx")
+    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
-    # ── 5. Excelテンプレートをコピー ──
     try:
-        OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-        copy_excel_file(TEMPLATE_PATH, result_path)
-        workbook = load_workbook_file(result_path)
+        raw_mappings, processed_sheets = generate_form_from_dict(
+            input_data=input_data,
+            source_metadata=source_metadata,
+            template_excel_path=TEMPLATE_PATH,
+            result_excel_path=result_path,
+            frame_name=frame_name,
+            source_filename=filename,
+        )
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Excelテンプレートの準備に失敗しました: {e}")
+        raise HTTPException(status_code=500, detail=f"Excel生成に失敗しました: {e}")
 
-    # ── 6. AIによるセルマッピング（キャッシュ優先）──
-    try:
-        template_hash = get_template_hash(TEMPLATE_PATH, f"frames/{frame_name}/{sheet_name}.yaml")
-        mappings_raw = load_mapping_cache(cache_path, template_hash)
-
-        if mappings_raw is None:
-            mappings_raw, reasoning_map = _determine_mapping_with_reasoning(
-                input_data, workbook, sheet_name, frame_name
-            )
-            save_mapping_cache(cache_path, template_hash, mappings_raw)
-        else:
-            reasoning_map = {key: "キャッシュから取得（前回のAI判定結果）" for key in mappings_raw}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"セルマッピングに失敗しました: {e}")
-
-    # ── 7. Excelへの書き込み ──
-    cell_mappings: list[CellMapping] = []
-    try:
-        for key, value in input_data.items():
-            if isinstance(value, list):
-                continue
-
-            cell_addresses = mappings_raw.get(key, [])
-            if isinstance(cell_addresses, str):
-                cell_addresses = [cell_addresses]
-
-            for cell_address in cell_addresses:
-                if cell_address == "不明":
-                    continue
-                success = write_to_cell(workbook, sheet_name, cell_address, value)
-                if success:
-                    cell_mappings.append(CellMapping(
-                        field_name=key,
-                        cell_address=cell_address,
-                        value=str(value),
-                        reasoning=reasoning_map.get(key, "根拠情報なし"),
-                    ))
-
-        # 表形式セクションの書き込み
-        config = load_frame_config(frame_name, sheet_name)
-        for section in config.get("sections", []):
-            if section.get("type") == "tabular":
-                write_tabular_section(workbook, sheet_name, section, input_data)
-
-        save_workbook_file(workbook, result_path)
-
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Excel書き込みに失敗しました: {e}")
+    cell_mappings = [CellMapping(**m) for m in raw_mappings]
+    primary_sheet = processed_sheets[0] if processed_sheets else sheet_name
+    sheets_label = ", ".join(processed_sheets) if processed_sheets else sheet_name
 
     return UploadResponse(
         session_id=session_id,
-        sheet_name=sheet_name,
+        frame_name=frame_name,
+        sheet_name=primary_sheet,
         mappings=cell_mappings,
-        message=f"{len(cell_mappings)}件のセルへの転記が完了しました（入力: {filename}）",
+        message=(
+            f"{len(cell_mappings)}件のセルへの転記が完了しました"
+            f"（入力: {filename}、シート: {sheets_label}）"
+        ),
     )
 
 
 @router.get("/download/{session_id}")
-async def download_result(session_id: str, sheet_name: str = "MRC1"):
+async def download_result(
+    session_id: str,
+    frame_name: str = "frameB",
+    sheet_name: str = "MRC1",
+):
     """転記済みExcelファイルをダウンロードする。"""
     from fastapi.responses import FileResponse
 
-    result_path = OUTPUT_DIR / f"result_{sheet_name}_{session_id}.xlsx"
+    # 新方式（frame_name ベース）で探す
+    result_path = OUTPUT_DIR / f"result_{frame_name}_{session_id}.xlsx"
+    if not result_path.exists():
+        # 旧方式（sheet_name ベース）にフォールバック
+        result_path = OUTPUT_DIR / f"result_{sheet_name}_{session_id}.xlsx"
     if not result_path.exists():
         raise HTTPException(status_code=404, detail="ファイルが見つかりません")
 
     return FileResponse(
         path=str(result_path),
-        filename=f"転記結果_{sheet_name}.xlsx",
+        filename=f"転記結果_{frame_name}.xlsx",
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     )
 
@@ -166,9 +131,14 @@ def _extract_from_file(
     suffix: str,
     sheet_name: str,
     frame_name: str,
-) -> dict:
+) -> tuple[dict, dict]:
     """
-    Excel/Wordファイルからdata_extractorを使ってJSONデータを抽出する。
+    Excel/Wordファイルからdata_extractorを使ってJSONデータと出典メタデータを抽出する。
+
+    Returns:
+        (input_data, source_metadata)
+        - input_data:      { フィールド名: 値 } の転記用辞書
+        - source_metadata: { フィールド名: { source_location, confidence, ... } }
     """
     UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
     temp_path = UPLOAD_DIR / filename
@@ -179,77 +149,15 @@ def _extract_from_file(
 
         print(f"   一時ファイル保存: {temp_path}")
 
-        input_data = extract_data_as_source_json(
+        result = extract_data(
             source_file=str(temp_path),
             sheet_name=sheet_name,
             frame_name=frame_name,
             verbose=True,
         )
 
-        return input_data
+        return result["data"], result.get("_metadata", {})
 
     finally:
         if temp_path.exists():
             temp_path.unlink()
-
-
-def _determine_mapping_with_reasoning(
-    input_data: dict,
-    workbook,
-    sheet_name: str,
-    frame_name: str,
-) -> tuple[dict, dict]:
-    """
-    AIによるマッピング判定を実行し、
-    mappings と reasoning を別々に返す。
-    """
-    import json
-    import re
-    from pathlib import Path
-    from apps.backend.app.core.excel_scanner import scan_label_cells
-    from apps.backend.app.core.frame_config_loader import extract_cell_definitions
-    from apps.backend.app.core.skill_loader import load_skill, render_skill
-    from apps.backend.app.core.ai_client import call_gemini
-
-    try:
-        config = load_frame_config(frame_name, sheet_name)
-        yaml_cell_defs = extract_cell_definitions(config)
-        field_aliases = config.get("field_aliases", {})
-    except FileNotFoundError:
-        yaml_cell_defs = {}
-        field_aliases = {}
-
-    label_map = scan_label_cells(workbook, sheet_name)
-
-    skill_dir = Path("apps/backend/app/agents/cell_locator")
-    skill_text = load_skill(skill_dir)
-    prompt = render_skill(
-        skill_text,
-        json_data=json.dumps(input_data, ensure_ascii=False, indent=2),
-        label_map=json.dumps(label_map, ensure_ascii=False, indent=2),
-        yaml_cell_defs=json.dumps(yaml_cell_defs, ensure_ascii=False, indent=2),
-        field_aliases=json.dumps(field_aliases, ensure_ascii=False, indent=2),
-    )
-
-    response_text = call_gemini(prompt)
-
-    match = re.search(r"```(?:json)?\s*(.*?)\s*```", response_text, re.DOTALL)
-    if match:
-        cleaned = match.group(1).strip()
-    else:
-        match2 = re.search(r"\{.*\}", response_text, re.DOTALL)
-        cleaned = match2.group(0).strip() if match2 else response_text.strip()
-
-    try:
-        result = json.loads(cleaned)
-        mappings = result.get("mappings", {})
-        reasoning = result.get("reasoning", {})
-        normalized = {
-            k: v if isinstance(v, list) else [v]
-            for k, v in mappings.items()
-        }
-        return normalized, reasoning
-    except Exception:
-        mappings = determine_cell_mapping(input_data, workbook, sheet_name, frame_name)
-        reasoning = {k: "根拠取得に失敗しました" for k in mappings}
-        return mappings, reasoning

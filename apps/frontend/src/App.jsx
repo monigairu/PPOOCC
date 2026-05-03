@@ -353,6 +353,144 @@ function MappingTable({ mappings, onCellClick, selectedCell }) {
   );
 }
 
+// ── ユーティリティ: 列インデックス→列文字 ──────
+function colIdxToLetter(n) {
+  let s = "";
+  while (n > 0) {
+    const r = (n - 1) % 26;
+    s = String.fromCharCode(65 + r) + s;
+    n = Math.floor((n - 1) / 26);
+  }
+  return s;
+}
+
+// ── Excelグリッドビュー ────────────────────────
+// template / templateError は App 親コンポーネントから渡される（タブ切替で再fetchしない）
+function ExcelGridView({ mappings, onCellClick, selectedCell, template, templateError }) {
+  const [hoveredAddr, setHoveredAddr] = useState(null);
+
+  if (templateError) {
+    return (
+      <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", color: "#f87171", fontSize: "13px" }}>
+        テンプレート読み込みエラー: {templateError}
+      </div>
+    );
+  }
+
+  if (!template) {
+    return (
+      <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", gap: "10px", color: COLORS.textDim }}>
+        <Spinner />
+        <span style={{ fontSize: "13px" }}>テンプレート読み込み中...</span>
+      </div>
+    );
+  }
+
+  const mappingMap = {};
+  (mappings || []).forEach((m) => { mappingMap[m.cell_address] = m; });
+
+  const { max_row, max_col, cells, merged_cells, col_widths, row_heights } = template;
+
+  // 2Dグリッドを構築
+  const grid = Array.from({ length: max_row }, (_, r) =>
+    Array.from({ length: max_col }, (_, c) => ({
+      row: r + 1, col: c + 1,
+      address: colIdxToLetter(c + 1) + (r + 1),
+      value: null, isCovered: false, rowspan: 1, colspan: 1,
+    }))
+  );
+
+  cells.forEach((cell) => {
+    if (cell.row <= max_row && cell.col <= max_col)
+      grid[cell.row - 1][cell.col - 1].value = cell.value;
+  });
+
+  merged_cells.forEach((m) => {
+    const sr = m.start_row - 1, sc = m.start_col - 1;
+    if (sr < max_row && sc < max_col) {
+      grid[sr][sc].rowspan = m.end_row - m.start_row + 1;
+      grid[sr][sc].colspan = m.end_col - m.start_col + 1;
+      for (let r = m.start_row; r <= Math.min(m.end_row, max_row); r++)
+        for (let c = m.start_col; c <= Math.min(m.end_col, max_col); c++)
+          if (r !== m.start_row || c !== m.start_col)
+            grid[r - 1][c - 1].isCovered = true;
+    }
+  });
+
+  return (
+    <div style={{ flex: 1, overflow: "auto", padding: "8px 12px" }}>
+      {/* 凡例 */}
+      {Object.keys(mappingMap).length > 0 && (
+        <div style={{ display: "flex", gap: "16px", marginBottom: "8px", fontSize: "11px", color: COLORS.textMuted, alignItems: "center" }}>
+          <span style={{ display: "flex", alignItems: "center", gap: "5px" }}>
+            <span style={{ display: "inline-block", width: "12px", height: "12px", borderRadius: "2px", background: "rgba(52,211,153,0.25)", border: "1px solid #34d399" }} />
+            転記済みセル（クリックで根拠確認）
+          </span>
+          <span style={{ display: "flex", alignItems: "center", gap: "5px" }}>
+            <span style={{ display: "inline-block", width: "12px", height: "12px", borderRadius: "2px", background: "rgba(79,142,247,0.35)", border: `1px solid ${COLORS.accent}` }} />
+            選択中
+          </span>
+        </div>
+      )}
+      <div style={{ overflowX: "auto" }}>
+        <table style={{ borderCollapse: "collapse", tableLayout: "fixed", fontSize: "11px", minWidth: "max-content" }}>
+          <colgroup>
+            {Array.from({ length: max_col }, (_, i) => (
+              <col key={i} style={{ width: (col_widths[String(i + 1)] || 80) + "px" }} />
+            ))}
+          </colgroup>
+          <tbody>
+            {grid.map((row, rIdx) => (
+              <tr key={rIdx} style={{ height: (row_heights[String(rIdx + 1)] || 20) + "px" }}>
+                {row.map((cell, cIdx) => {
+                  if (cell.isCovered) return null;
+                  const mapping = mappingMap[cell.address];
+                  const isSelected = selectedCell?.cell_address === cell.address;
+                  const isHovered = hoveredAddr === cell.address;
+
+                  let bg = "transparent", textColor = COLORS.textMuted, borderStyle = `1px solid ${COLORS.border}`;
+                  if (mapping) {
+                    if (isSelected) {
+                      bg = "rgba(79,142,247,0.35)"; borderStyle = `2px solid ${COLORS.accent}`; textColor = "#fff";
+                    } else if (isHovered) {
+                      bg = "rgba(52,211,153,0.30)"; borderStyle = `1px solid ${COLORS.success}`; textColor = COLORS.success;
+                    } else {
+                      bg = "rgba(52,211,153,0.15)"; borderStyle = `1px solid rgba(52,211,153,0.4)`; textColor = COLORS.success;
+                    }
+                  }
+
+                  return (
+                    <td
+                      key={cIdx}
+                      rowSpan={cell.rowspan}
+                      colSpan={cell.colspan}
+                      onClick={() => mapping && onCellClick(mapping)}
+                      onMouseEnter={() => mapping && setHoveredAddr(cell.address)}
+                      onMouseLeave={() => setHoveredAddr(null)}
+                      title={mapping ? `${mapping.field_name}（${cell.address}）\n転記値: ${mapping.value}` : undefined}
+                      style={{
+                        border: borderStyle, background: bg,
+                        cursor: mapping ? "pointer" : "default",
+                        padding: "2px 5px", color: textColor,
+                        fontWeight: mapping ? 700 : 400,
+                        overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
+                        transition: "background 0.1s, border 0.1s",
+                        verticalAlign: "middle", maxWidth: 0,
+                      }}
+                    >
+                      {mapping ? mapping.value : cell.value}
+                    </td>
+                  );
+                })}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
 // ── チャットパネル ─────────────────────────────
 function ChatPanel({ selectedCell, sessionId }) {
   const [messages, setMessages] = useState([
@@ -555,9 +693,24 @@ export default function App() {
   const [isLoading, setIsLoading] = useState(false);
   const [mappings, setMappings] = useState([]);
   const [sessionId, setSessionId] = useState(null);
+  const [frameName, setFrameName] = useState("frameB");
   const [selectedCell, setSelectedCell] = useState(null);
   const [statusMessage, setStatusMessage] = useState("");
   const [error, setError] = useState("");
+  const [viewMode, setViewMode] = useState("table"); // "table" | "grid"
+
+  // 空テンプレートは起動時に一度だけ取得
+  const [template, setTemplate] = useState(null);
+  const [templateError, setTemplateError] = useState(null);
+  useEffect(() => {
+    fetch(`${API_BASE}/template?sheet_name=MRC1`)
+      .then((r) => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.json(); })
+      .then(setTemplate)
+      .catch((e) => setTemplateError(e.message));
+  }, []);
+
+  // 転記後の出力ファイルレイアウト（解体機器の行を含む）
+  const [resultTemplate, setResultTemplate] = useState(null);
 
   const handleRun = async () => {
     if (!file) return;
@@ -586,7 +739,15 @@ export default function App() {
       const data = await res.json();
       setMappings(data.mappings);
       setSessionId(data.session_id);
+      const fn = data.frame_name || "frameB";
+      setFrameName(fn);
       setStatusMessage(data.message);
+
+      // 転記済み出力ファイルのレイアウトを取得（解体機器の行を含む）
+      fetch(`${API_BASE}/result-layout/${data.session_id}?frame_name=${fn}&sheet_name=MRC1`)
+        .then((r) => r.ok ? r.json() : null)
+        .then((layout) => { if (layout) setResultTemplate(layout); })
+        .catch(() => {});
     } catch (e) {
       setError(e.message);
       setStatusMessage("");
@@ -602,7 +763,7 @@ export default function App() {
         @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;500;600;700&display=swap');
         @keyframes spin { to { transform: rotate(360deg); } }
         * { box-sizing: border-box; margin: 0; padding: 0; }
-        ::-webkit-scrollbar { width: 6px; }
+        ::-webkit-scrollbar { width: 6px; height: 6px; }
         ::-webkit-scrollbar-track { background: transparent; }
         ::-webkit-scrollbar-thumb { background: #2a2e42; border-radius: 3px; }
       `}</style>
@@ -613,7 +774,7 @@ export default function App() {
         <h1 style={styles.headerTitle}>NuRO 様式自動作成①</h1>
         <span style={styles.headerSub}>
           {sessionId
-            ? <a href={`${API_BASE}/download/${sessionId}?sheet_name=MRC1`}
+            ? <a href={`${API_BASE}/download/${sessionId}?frame_name=${frameName}`}
                  style={{ color: COLORS.accent, textDecoration: "none", fontSize: "12px" }}>
                 ⬇ Excelをダウンロード
               </a>
@@ -639,7 +800,24 @@ export default function App() {
             background: COLORS.surface,
             borderBottom: `1px solid ${COLORS.border}`,
           }}>
-            <span>転記結果テーブル</span>
+            <span>転記結果</span>
+            {/* 表示モード切替 */}
+            <div style={{ display: "flex", gap: "4px" }}>
+              {[{ key: "table", label: "テーブル" }, { key: "grid", label: "様式プレビュー" }].map(({ key, label }) => (
+                <button
+                  key={key}
+                  onClick={() => setViewMode(key)}
+                  style={{
+                    padding: "3px 10px", borderRadius: "4px",
+                    border: `1px solid ${viewMode === key ? COLORS.accent : COLORS.border}`,
+                    background: viewMode === key ? COLORS.accentSoft : "transparent",
+                    color: viewMode === key ? COLORS.accent : COLORS.textMuted,
+                    cursor: "pointer", fontSize: "11px", fontWeight: 600,
+                    textTransform: "none", letterSpacing: 0, transition: "all 0.15s",
+                  }}
+                >{label}</button>
+              ))}
+            </div>
             {statusMessage && (
               <span style={{ fontSize: "11px", color: COLORS.success, fontWeight: 600, textTransform: "none", letterSpacing: 0 }}>
                 ✓ {statusMessage}
@@ -652,15 +830,27 @@ export default function App() {
             )}
             {mappings.length > 0 && (
               <span style={{ fontSize: "11px", color: COLORS.textMuted, marginLeft: "auto", textTransform: "none", letterSpacing: 0 }}>
-                行をクリックすると右のチャットで根拠を確認できます
+                {viewMode === "grid"
+                  ? "緑のセルをクリックすると根拠をチャットで確認できます"
+                  : "行をクリックすると右のチャットで根拠を確認できます"}
               </span>
             )}
           </div>
-          <MappingTable
-            mappings={mappings}
-            onCellClick={setSelectedCell}
-            selectedCell={selectedCell}
-          />
+          {viewMode === "table" ? (
+            <MappingTable
+              mappings={mappings}
+              onCellClick={setSelectedCell}
+              selectedCell={selectedCell}
+            />
+          ) : (
+            <ExcelGridView
+              mappings={mappings}
+              onCellClick={setSelectedCell}
+              selectedCell={selectedCell}
+              template={resultTemplate || template}
+              templateError={templateError}
+            />
+          )}
         </div>
 
         {/* ── 右パネル: チャット ── */}

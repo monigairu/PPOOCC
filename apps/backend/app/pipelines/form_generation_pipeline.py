@@ -3,8 +3,13 @@
 
 JSON データを入力として、Excel テンプレートに値を転記し、
 完成した Excel ファイルを出力する一連の処理フロー。
+
+エントリーポイント:
+  run_form_generation()       CLIスクリプト用（JSONファイルパスを受け取る）
+  generate_form_from_dict()   API用（辞書データを受け取り、マッピング情報を返す）
 """
 import json
+import re
 from pathlib import Path
 
 from apps.backend.app.agents.cell_locator.cell_locator_agent import determine_cell_mapping
@@ -19,8 +24,10 @@ from apps.backend.app.core.excel_io import (
     load_workbook_file,
     save_workbook_file,
 )
-from apps.backend.app.core.frame_config_loader import load_frame_config
+from apps.backend.app.core.frame_config_loader import load_frame_config, extract_cell_definitions
 from apps.backend.app.section_handlers.tabular_handler import write_tabular_section
+
+CACHE_DIR = Path("data/form_generation/cache")
 
 
 def run_form_generation(
@@ -126,3 +133,206 @@ def run_form_generation(
     print(f"入力データ:   {source_json_path}")
     print(f"テンプレート: {template_excel_path}")
     print(f"出力結果:     {result_excel_path}")
+
+
+def generate_form_from_dict(
+    input_data: dict,
+    source_metadata: dict,
+    template_excel_path: str,
+    result_excel_path: str,
+    frame_name: str = "frameB",
+    source_filename: str = "",
+) -> tuple[list[dict], list[str]]:
+    """
+    辞書データからExcel転記を実行し、セルマッピング情報を返す。
+
+    APIから呼び出すためのエントリーポイント。
+    frames/{frame_name}/ 配下の全YAML定義シートを自動的に処理する。
+
+    Args:
+        input_data:          { フィールド名: 値 } の転記用辞書
+        source_metadata:     data_extractor の _metadata（source_location を含む）
+        template_excel_path: テンプレートExcelのパス
+        result_excel_path:   出力先Excelのパス
+        frame_name:          様式名（例: "frameB"）
+        source_filename:     アップロードされたファイル名（reasoning に使用）
+
+    Returns:
+        (cell_mappings, processed_sheets)
+        - cell_mappings: [{"field_name", "cell_address", "value", "reasoning"}, ...]
+        - processed_sheets: 転記処理したシート名のリスト
+    """
+    # 1. frames/{frame_name}/ 配下の全YAMLを列挙（将来の複数シート対応）
+    yaml_dir = Path("frames") / frame_name
+    sheet_names = sorted(f.stem for f in yaml_dir.glob("*.yaml"))
+    if not sheet_names:
+        raise FileNotFoundError(f"YAML定義が見つかりません: {yaml_dir}")
+
+    print(f"=== 様式生成パイプライン（API） ===")
+    print(f"   処理対象シート: {sheet_names}")
+
+    # 2. テンプレートをコピーしてworkbookを読み込む
+    Path(result_excel_path).parent.mkdir(parents=True, exist_ok=True)
+    copy_excel_file(template_excel_path, result_excel_path)
+    workbook = load_workbook_file(result_excel_path)
+
+    all_cell_mappings: list[dict] = []
+    processed_sheets: list[str] = []
+
+    for sheet_name in sheet_names:
+        if sheet_name not in workbook.sheetnames:
+            print(f"   ⚠️  シート '{sheet_name}' はテンプレートに存在しません（スキップ）")
+            continue
+
+        print(f"\n--- シート: {sheet_name} ---")
+
+        # 3. キャッシュ優先でセルマッピング（reasoning付き）を取得
+        yaml_path = f"frames/{frame_name}/{sheet_name}.yaml"
+        cache_path = str(CACHE_DIR / f"mapping_cache_{sheet_name}.json")
+        template_hash = get_template_hash(template_excel_path, yaml_path)
+        mappings_raw = load_mapping_cache(cache_path, template_hash)
+
+        if mappings_raw is None:
+            print("   キャッシュなし → AIによるマッピング判定")
+            mappings_raw, reasoning_map = _determine_mapping_with_reasoning(
+                input_data, workbook, sheet_name, frame_name
+            )
+            save_mapping_cache(cache_path, template_hash, mappings_raw)
+        else:
+            print("   キャッシュあり → キャッシュを使用")
+            reasoning_map = {key: "キャッシュから取得（前回のAI判定結果）" for key in mappings_raw}
+
+        # 4. 通常フィールドの書き込み
+        for key, value in input_data.items():
+            if isinstance(value, list):
+                continue
+
+            cell_addresses = mappings_raw.get(key, [])
+            if isinstance(cell_addresses, str):
+                cell_addresses = [cell_addresses]
+
+            for cell_address in cell_addresses:
+                if cell_address == "不明":
+                    continue
+                success = write_to_cell(workbook, sheet_name, cell_address, value)
+                if success:
+                    base_reasoning = reasoning_map.get(key, "根拠情報なし")
+                    field_meta = source_metadata.get(key, {})
+                    source_loc = (
+                        field_meta.get("source_location")
+                        if isinstance(field_meta, dict) else None
+                    )
+                    reasoning = (
+                        f"{base_reasoning}\n抽出元: {source_filename} | {source_loc}"
+                        if source_loc else base_reasoning
+                    )
+                    all_cell_mappings.append({
+                        "field_name": key,
+                        "cell_address": cell_address,
+                        "value": str(value),
+                        "reasoning": reasoning,
+                    })
+
+        # 5. 表形式セクションの書き込み＋マッピング収集
+        try:
+            config = load_frame_config(frame_name, sheet_name)
+            for section in config.get("sections", []):
+                if section.get("type") != "tabular":
+                    continue
+
+                print(f"   表形式セクション '{section['name']}' を書き込み中")
+                write_tabular_section(workbook, sheet_name, section, input_data)
+
+                # 書き込んだ表形式セルをマッピングに追加（ハイライト・チャット連動）
+                json_key = section.get("json_key", "")
+                rows = input_data.get(json_key, [])
+                data_start_row = section.get("data_start_row", 30)
+                col_map = {
+                    col["name"]: col["column"]
+                    for col in section.get("columns", [])
+                }
+                for row_idx, row_data in enumerate(rows):
+                    excel_row = data_start_row + row_idx
+                    for field_name, value in row_data.items():
+                        if field_name not in col_map or not value:
+                            continue
+                        cell_address = f"{col_map[field_name]}{excel_row}"
+                        all_cell_mappings.append({
+                            "field_name": f"{json_key}[{row_idx + 1}行目].{field_name}",
+                            "cell_address": cell_address,
+                            "value": str(value),
+                            "reasoning": (
+                                f"表形式データ「{json_key}」{row_idx + 1}行目の"
+                                f"「{field_name}」列\n"
+                                f"抽出元: {source_filename}"
+                            ),
+                        })
+        except FileNotFoundError:
+            pass
+
+        processed_sheets.append(sheet_name)
+
+    # 6. 結果を保存
+    save_workbook_file(workbook, result_excel_path)
+    print(f"\n=== 処理完了: {result_excel_path} ===")
+
+    return all_cell_mappings, processed_sheets
+
+
+def _determine_mapping_with_reasoning(
+    input_data: dict,
+    workbook,
+    sheet_name: str,
+    frame_name: str,
+) -> tuple[dict, dict]:
+    """
+    AIによるセルマッピング判定を実行し、mappings と reasoning を返す。
+
+    generate_form_from_dict() の内部ヘルパー。
+    """
+    from apps.backend.app.core.excel_scanner import scan_label_cells
+    from apps.backend.app.core.skill_loader import load_skill, render_skill
+    from apps.backend.app.core.ai_client import call_gemini
+
+    try:
+        config = load_frame_config(frame_name, sheet_name)
+        yaml_cell_defs = extract_cell_definitions(config)
+        field_aliases = config.get("field_aliases", {})
+    except FileNotFoundError:
+        yaml_cell_defs = {}
+        field_aliases = {}
+
+    label_map = scan_label_cells(workbook, sheet_name)
+
+    skill_dir = Path("apps/backend/app/agents/cell_locator")
+    skill_text = load_skill(skill_dir)
+    prompt = render_skill(
+        skill_text,
+        json_data=json.dumps(input_data, ensure_ascii=False, indent=2),
+        label_map=json.dumps(label_map, ensure_ascii=False, indent=2),
+        yaml_cell_defs=json.dumps(yaml_cell_defs, ensure_ascii=False, indent=2),
+        field_aliases=json.dumps(field_aliases, ensure_ascii=False, indent=2),
+    )
+
+    response_text = call_gemini(prompt)
+
+    match = re.search(r"```(?:json)?\s*(.*?)\s*```", response_text, re.DOTALL)
+    if match:
+        cleaned = match.group(1).strip()
+    else:
+        match2 = re.search(r"\{.*\}", response_text, re.DOTALL)
+        cleaned = match2.group(0).strip() if match2 else response_text.strip()
+
+    try:
+        result = json.loads(cleaned)
+        mappings = result.get("mappings", {})
+        reasoning = result.get("reasoning", {})
+        normalized = {
+            k: v if isinstance(v, list) else [v]
+            for k, v in mappings.items()
+        }
+        return normalized, reasoning
+    except Exception:
+        mappings = determine_cell_mapping(input_data, workbook, sheet_name, frame_name)
+        reasoning = {k: "根拠取得に失敗しました" for k in mappings}
+        return mappings, reasoning

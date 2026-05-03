@@ -12,7 +12,7 @@ from dotenv import load_dotenv
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from apps.backend.app.api.routes import upload, chat
+from apps.backend.app.api.routes import upload, chat, template
 
 # .envファイルの読み込み（Vertex AI認証情報など）
 load_dotenv()
@@ -34,8 +34,9 @@ app.add_middleware(
 )
 
 # ── ルーターの登録 ─────────────────────────────
-app.include_router(upload.router, prefix="/api", tags=["転記"])
-app.include_router(chat.router,   prefix="/api", tags=["チャット"])
+app.include_router(upload.router,   prefix="/api", tags=["転記"])
+app.include_router(chat.router,    prefix="/api", tags=["チャット"])
+app.include_router(template.router, prefix="/api", tags=["テンプレート"])
 
 
 # ── ヘルスチェック ─────────────────────────────

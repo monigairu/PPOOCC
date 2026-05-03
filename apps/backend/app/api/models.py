@@ -36,7 +36,8 @@ class CellMapping(BaseModel):
 class UploadResponse(BaseModel):
     """アップロード・転記実行後のレスポンス"""
     session_id: str              # セッションID（ダウンロード時に使う）
-    sheet_name: str              # 処理したシート名
+    frame_name: str              # 様式名（例: "frameB"）ダウンロードURLに使用
+    sheet_name: str              # 処理した主シート名
     mappings: list[CellMapping]  # セルごとのマッピング情報一覧
     message: str                 # 処理結果メッセージ
 
