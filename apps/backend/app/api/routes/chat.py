@@ -34,13 +34,13 @@ def _build_prompt(req: ChatRequest) -> str:
     転記時の根拠をコンテキストとして含めることで、
     AIが具体的な説明をできるようにする。
     """
-    # reasoningにキャッシュ関連の文言が含まれているか判定
-    is_cache_reasoning = "キャッシュ" in req.reasoning
+    # 抽出元情報（資料名・行）が含まれているか判定
+    has_source_info = "抽出元:" in req.reasoning
 
     reasoning_context = (
-        "（この転記はAIが資料を分析した結果です。具体的な資料の箇所は特定できていません）"
-        if is_cache_reasoning
-        else req.reasoning
+        req.reasoning
+        if has_source_info
+        else "（この転記はAIが資料を分析した結果です。具体的な資料の箇所は特定できていません）"
     )
 
     return f"""あなたはNuRO（廃炉情報管理システム）の様式自動作成AIアシスタントです。

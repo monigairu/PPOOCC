@@ -4,16 +4,13 @@
 GET /api/template               空テンプレートのレイアウトを返す（起動時に取得）
 GET /api/result-layout/{id}     転記済み出力ファイルのレイアウトを返す（転記後に取得）
 """
-from pathlib import Path
-
 from fastapi import APIRouter, HTTPException
 from openpyxl import load_workbook
 from openpyxl.utils import column_index_from_string
 
-router = APIRouter()
+from apps.backend.app.core.settings import TEMPLATE_PATH, OUTPUT_DIR
 
-TEMPLATE_PATH = Path("data/form_generation/input/templates/frameB_MRC.xlsx")
-OUTPUT_DIR = Path("data/form_generation/output")
+router = APIRouter()
 
 
 @router.get("/template")
@@ -63,7 +60,6 @@ def _read_excel_layout(file_path: str, sheet_name: str) -> dict:
 
     # 結合セル範囲
     merged = []
-    existing_merges: set[tuple] = set()
     for r in ws.merged_cells.ranges:
         merged.append({
             "start_row": r.min_row,
@@ -71,21 +67,6 @@ def _read_excel_layout(file_path: str, sheet_name: str) -> dict:
             "end_row": r.max_row,
             "end_col": r.max_col,
         })
-        existing_merges.add((r.min_row, r.min_col, r.max_row, r.max_col))
-
-    # K:N が結合されているのに G:J が結合されていない行を補完（テンプレートの非対称修正）
-    for r in list(merged):
-        if (r["start_col"] == 11 and r["end_col"] == 14
-                and r["start_row"] == r["end_row"]):
-            key = (r["start_row"], 7, r["end_row"], 10)
-            if key not in existing_merges:
-                merged.append({
-                    "start_row": r["start_row"],
-                    "start_col": 7,
-                    "end_row": r["end_row"],
-                    "end_col": 10,
-                })
-                existing_merges.add(key)
 
     # 列幅（Excel単位 → ピクセル近似）
     col_widths = {}

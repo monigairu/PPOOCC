@@ -14,13 +14,10 @@ from fastapi import APIRouter, HTTPException, UploadFile, File, Form
 
 from apps.backend.app.api.models import UploadResponse, CellMapping
 from apps.backend.app.agents.data_extractor.data_extractor_agent import extract_data
+from apps.backend.app.core.settings import OUTPUT_DIR, UPLOAD_DIR, TEMPLATE_PATH
 from apps.backend.app.pipelines.form_generation_pipeline import generate_form_from_dict
 
 router = APIRouter()
-
-OUTPUT_DIR = Path("data/form_generation/output")
-UPLOAD_DIR = Path("data/form_generation/input/uploaded")
-TEMPLATE_PATH = "data/form_generation/input/templates/frameB_MRC.xlsx"
 
 SUPPORTED_EXTENSIONS = {".json", ".xlsx", ".xls", ".docx"}
 
@@ -69,7 +66,7 @@ async def upload_and_generate(
         raise HTTPException(status_code=400, detail=f"ファイルの読み込みに失敗しました: {e}")
 
     # ── Excel生成（pipelineに委譲）──────────────
-    session_id = str(uuid.uuid4())[:8]
+    session_id = str(uuid.uuid4())  # ③ 全桁使用（8文字切り捨てを廃止）
     result_path = str(OUTPUT_DIR / f"result_{frame_name}_{session_id}.xlsx")
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -77,7 +74,7 @@ async def upload_and_generate(
         raw_mappings, processed_sheets = generate_form_from_dict(
             input_data=input_data,
             source_metadata=source_metadata,
-            template_excel_path=TEMPLATE_PATH,
+            template_excel_path=str(TEMPLATE_PATH),
             result_excel_path=result_path,
             frame_name=frame_name,
             source_filename=filename,
@@ -110,10 +107,9 @@ async def download_result(
     """転記済みExcelファイルをダウンロードする。"""
     from fastapi.responses import FileResponse
 
-    # 新方式（frame_name ベース）で探す
     result_path = OUTPUT_DIR / f"result_{frame_name}_{session_id}.xlsx"
     if not result_path.exists():
-        # 旧方式（sheet_name ベース）にフォールバック
+        # 旧形式（8文字session_id）へのフォールバック
         result_path = OUTPUT_DIR / f"result_{sheet_name}_{session_id}.xlsx"
     if not result_path.exists():
         raise HTTPException(status_code=404, detail="ファイルが見つかりません")
@@ -135,19 +131,20 @@ def _extract_from_file(
     """
     Excel/Wordファイルからdata_extractorを使ってJSONデータと出典メタデータを抽出する。
 
+    ①② 一時ファイル名にUUIDを使用してパストラバーサルと競合を防ぐ。
+
     Returns:
         (input_data, source_metadata)
         - input_data:      { フィールド名: 値 } の転記用辞書
         - source_metadata: { フィールド名: { source_location, confidence, ... } }
     """
     UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
-    temp_path = UPLOAD_DIR / filename
+    # ①② ファイル名をそのまま使わずUUIDで生成（パストラバーサル・競合防止）
+    temp_path = UPLOAD_DIR / f"{uuid.uuid4().hex}{suffix}"
 
     try:
         with open(temp_path, "wb") as f:
             f.write(content)
-
-        print(f"   一時ファイル保存: {temp_path}")
 
         result = extract_data(
             source_file=str(temp_path),

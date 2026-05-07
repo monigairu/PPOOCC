@@ -9,7 +9,6 @@ LLM は一切使用しない（決定論的処理）。
 from pathlib import Path
 
 from openpyxl import load_workbook
-from openpyxl.cell.cell import MergedCell
 
 
 def parse_file(file_path: str) -> str:
@@ -67,13 +66,17 @@ def _parse_excel(path: Path) -> str:
         output_lines.append("")
 
         for row in ws.iter_rows():
-            row_num = row[0].row
+            # read_only=True モードでは結合セルの非主セルが EmptyCell として返され
+            # .row 属性を持たない。先頭から .row を持つセルを探して行番号を取得する。
+            row_num = next((c.row for c in row if hasattr(c, "row")), None)
+            if row_num is None:
+                continue
             cells: list[str] = []
 
             for cell in row:
-                if isinstance(cell, MergedCell):
-                    cells.append("(結合)")
-                elif cell.value is None:
+                # read_only モードでは MergedCell ではなく EmptyCell が返されるため
+                # hasattr で value の有無を確認してから処理する
+                if not hasattr(cell, "value") or cell.value is None:
                     cells.append("(空)")
                 else:
                     cells.append(str(cell.value).strip())

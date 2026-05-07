@@ -13,6 +13,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from apps.backend.app.api.routes import upload, chat, template
+from apps.backend.app.core.settings import CORS_ORIGINS
 
 # .envファイルの読み込み（Vertex AI認証情報など）
 load_dotenv()
@@ -25,11 +26,11 @@ app = FastAPI(
 )
 
 # ── CORS設定 ──────────────────────────────────
-# フロントエンド（React）からのリクエストを許可する
+# 許可オリジンは settings.py で管理（本番では環境変数から読む）
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # PoCのため全オリジン許可（本番では制限する）
-    allow_methods=["*"],
+    allow_origins=CORS_ORIGINS,
+    allow_methods=["GET", "POST"],
     allow_headers=["*"],
 )
 

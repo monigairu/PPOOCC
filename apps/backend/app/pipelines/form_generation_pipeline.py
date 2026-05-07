@@ -25,9 +25,8 @@ from apps.backend.app.core.excel_io import (
     save_workbook_file,
 )
 from apps.backend.app.core.frame_config_loader import load_frame_config, extract_cell_definitions
+from apps.backend.app.core.settings import CACHE_DIR
 from apps.backend.app.section_handlers.tabular_handler import write_tabular_section
-
-CACHE_DIR = Path("data/form_generation/cache")
 
 
 def run_form_generation(
@@ -200,7 +199,7 @@ def generate_form_from_dict(
             save_mapping_cache(cache_path, template_hash, mappings_raw)
         else:
             print("   キャッシュあり → キャッシュを使用")
-            reasoning_map = {key: "キャッシュから取得（前回のAI判定結果）" for key in mappings_raw}
+            reasoning_map = {key: "前回のAI判定結果を使用" for key in mappings_raw}
 
         # 4. 通常フィールドの書き込み
         for key, value in input_data.items():

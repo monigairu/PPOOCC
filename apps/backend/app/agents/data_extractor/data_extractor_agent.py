@@ -124,22 +124,3 @@ def extract_data(
     return final_result
 
 
-def extract_data_as_source_json(
-    source_file: str,
-    sheet_name: str,
-    frame_name: str = "frameB",
-    verbose: bool = True,
-) -> dict:
-    """
-    extract_data の結果から data 部分のみ返す。
-
-    既存の form_generation_pipeline にそのまま渡せる形式。
-    sample_source.json と同じ構造の辞書を返す。
-    """
-    result = extract_data(
-        source_file=source_file,
-        sheet_name=sheet_name,
-        frame_name=frame_name,
-        verbose=verbose,
-    )
-    return result["data"]
