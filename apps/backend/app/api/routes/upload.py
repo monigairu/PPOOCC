@@ -10,7 +10,7 @@ import json
 import uuid
 from pathlib import Path
 
-from fastapi import APIRouter, HTTPException, UploadFile, File, Form
+from fastapi import APIRouter, HTTPException, UploadFile, File, Form, Path as FastAPIPath, Query
 
 from apps.backend.app.api.models import UploadResponse, CellMapping
 from apps.backend.app.agents.data_extractor.data_extractor_agent import extract_data
@@ -25,8 +25,8 @@ SUPPORTED_EXTENSIONS = {".json", ".xlsx", ".xls", ".docx"}
 @router.post("/upload", response_model=UploadResponse)
 async def upload_and_generate(
     file: UploadFile = File(...),
-    sheet_name: str = Form(default="MRC1"),
-    frame_name: str = Form(default="frameB"),
+    sheet_name: str = Form(default="MRC1", pattern=r"^[a-zA-Z0-9_\-]+$"),
+    frame_name: str = Form(default="frameB", pattern=r"^[a-zA-Z0-9_\-]+$"),
 ):
     """
     ファイルをアップロードしてNuRO様式を自動生成する。
@@ -39,6 +39,7 @@ async def upload_and_generate(
     frame_name 配下の全YAML定義シートを処理する。
     """
     filename = file.filename or "unknown"
+    # pathlib.Path(filename).suffixを使って安全に拡張子を取得
     suffix = Path(filename).suffix.lower()
 
     if suffix not in SUPPORTED_EXTENSIONS:
@@ -49,6 +50,10 @@ async def upload_and_generate(
 
     content = await file.read()
 
+    # パストラバーサル対策: pathlib.Path().nameでサニタイズ
+    safe_frame = Path(frame_name).name
+    safe_sheet = Path(sheet_name).name
+
     # ── データ抽出 ──────────────────────────────
     try:
         if suffix == ".json":
@@ -57,7 +62,7 @@ async def upload_and_generate(
             print(f"   JSONファイルを直接読み込みました: {filename}")
         else:
             input_data, source_metadata = _extract_from_file(
-                content, filename, suffix, sheet_name, frame_name
+                content, filename, suffix, safe_sheet, safe_frame
             )
             print(f"   {suffix}ファイルからデータを抽出しました: {filename}")
     except json.JSONDecodeError as e:
@@ -67,7 +72,7 @@ async def upload_and_generate(
 
     # ── Excel生成（pipelineに委譲）──────────────
     session_id = str(uuid.uuid4())  # ③ 全桁使用（8文字切り捨てを廃止）
-    result_path = str(OUTPUT_DIR / f"result_{frame_name}_{session_id}.xlsx")
+    result_path = str(OUTPUT_DIR / f"result_{safe_frame}_{session_id}.xlsx")
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
     try:
@@ -76,7 +81,7 @@ async def upload_and_generate(
             source_metadata=source_metadata,
             template_excel_path=str(TEMPLATE_PATH),
             result_excel_path=result_path,
-            frame_name=frame_name,
+            frame_name=safe_frame,
             source_filename=filename,
         )
     except Exception as e:
@@ -88,7 +93,7 @@ async def upload_and_generate(
 
     return UploadResponse(
         session_id=session_id,
-        frame_name=frame_name,
+        frame_name=safe_frame,
         sheet_name=primary_sheet,
         mappings=cell_mappings,
         message=(
@@ -100,23 +105,29 @@ async def upload_and_generate(
 
 @router.get("/download/{session_id}")
 async def download_result(
-    session_id: str,
-    frame_name: str = "frameB",
-    sheet_name: str = "MRC1",
+    session_id: str = FastAPIPath(..., pattern=r"^[a-f0-9\-]{8,36}+$"),
+    frame_name: str = Query("frameB", pattern=r"^[a-zA-Z0-9_\-]+$"),
+    sheet_name: str = Query("MRC1", pattern=r"^[a-zA-Z0-9_\-]+$"),
 ):
     """転記済みExcelファイルをダウンロードする。"""
     from fastapi.responses import FileResponse
 
-    result_path = OUTPUT_DIR / f"result_{frame_name}_{session_id}.xlsx"
+    # pathlib.Path.nameを使用してサニタイズ(パストラバーサル対策)
+    safe_frame = Path(frame_name).name
+    safe_session = Path(session_id).name
+    safe_sheet = Path(sheet_name).name
+
+    result_path = OUTPUT_DIR / f"result_{safe_frame}_{safe_session}.xlsx"
     if not result_path.exists():
-        # 旧形式（8文字session_id）へのフォールバック
-        result_path = OUTPUT_DIR / f"result_{sheet_name}_{session_id}.xlsx"
+        # 旧形式（8文字session_id または sheet_name 使用）へのフォールバック
+        result_path = OUTPUT_DIR / f"result_{safe_sheet}_{safe_session}.xlsx"
+
     if not result_path.exists():
         raise HTTPException(status_code=404, detail="ファイルが見つかりません")
 
     return FileResponse(
         path=str(result_path),
-        filename=f"転記結果_{frame_name}.xlsx",
+        filename=f"転記結果_{safe_frame}.xlsx",
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     )
 
@@ -139,8 +150,12 @@ def _extract_from_file(
         - source_metadata: { フィールド名: { source_location, confidence, ... } }
     """
     UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+    # suffix をバリデーション済みのSUPPORTED_EXTENSIONSに限定し、かつPath.nameでサニタイズ
+    if suffix not in SUPPORTED_EXTENSIONS:
+        raise ValueError(f"未対応のファイル形式です: {suffix}")
+    safe_suffix = Path(suffix).name
     # ①② ファイル名をそのまま使わずUUIDで生成（パストラバーサル・競合防止）
-    temp_path = UPLOAD_DIR / f"{uuid.uuid4().hex}{suffix}"
+    temp_path = UPLOAD_DIR / f"{uuid.uuid4().hex}{safe_suffix}"
 
     try:
         with open(temp_path, "wb") as f:

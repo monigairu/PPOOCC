@@ -4,7 +4,9 @@
 GET /api/template               空テンプレートのレイアウトを返す（起動時に取得）
 GET /api/result-layout/{id}     転記済み出力ファイルのレイアウトを返す（転記後に取得）
 """
-from fastapi import APIRouter, HTTPException
+
+from pathlib import Path
+from fastapi import APIRouter, HTTPException, Path as FastAPIPath, Query
 from openpyxl import load_workbook
 from openpyxl.utils import column_index_from_string
 
@@ -14,29 +16,38 @@ router = APIRouter()
 
 
 @router.get("/template")
-async def get_template_structure(sheet_name: str = "MRC1"):
+async def get_template_structure(
+    sheet_name: str = Query("MRC1", pattern=r"^[a-zA-Z0-9_\-]+$")
+):
     """空テンプレートのレイアウト情報をJSONで返す。起動時に一度だけ取得する。"""
     if not TEMPLATE_PATH.exists():
         raise HTTPException(status_code=404, detail="テンプレートファイルが見つかりません")
+    # sheet_nameはExcel内の参照にのみに使用されるが、念のためバリデーション済み
     return _read_excel_layout(str(TEMPLATE_PATH), sheet_name)
 
 
 @router.get("/result-layout/{session_id}")
 async def get_result_layout(
-    session_id: str,
-    frame_name: str = "frameB",
-    sheet_name: str = "MRC1",
+    session_id: str = FastAPIPath(..., pattern=r"^[a-f0-9\-]{8,36}+$"),
+    frame_name: str = Query("frameB", pattern=r"^[a-zA-Z0-9_\-]+$"),
+    sheet_name: str = Query("MRC1", pattern=r"^[a-zA-Z0-9_\-]+$"),
 ):
     """転記済み出力ファイルのレイアウト情報をJSONで返す。転記完了後に取得する。
 
     テンプレートと異なり、動的に追加された解体機器の行も含む。
     """
-    result_path = OUTPUT_DIR / f"result_{frame_name}_{session_id}.xlsx"
+    # pathlib.Path.nameを使用してサニタイズ(パストラバーサル対策)
+    safe_frame = Path(frame_name).name
+    safe_session = Path(session_id).name
+    safe_sheet = Path(sheet_name).name
+    
+    result_path = OUTPUT_DIR / f"result_{safe_frame}_{safe_session}.xlsx"
     if not result_path.exists():
-        result_path = OUTPUT_DIR / f"result_{sheet_name}_{session_id}.xlsx"
+        # 旧形式（8文字session_id または sheet_name 使用）へのフォールバック
+        result_path = OUTPUT_DIR / f"result_{safe_sheet}_{safe_session}.xlsx"
     if not result_path.exists():
-        raise HTTPException(status_code=404, detail="転記済みファイルが見つかりません")
-    return _read_excel_layout(str(result_path), sheet_name)
+        raise HTTPException(status_code=404, detail="転記済みファイルが見つかりません") 
+    return _read_excel_layout(str(result_path), safe_sheet)
 
 
 def _read_excel_layout(file_path: str, sheet_name: str) -> dict:

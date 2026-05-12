@@ -65,12 +65,7 @@ def _parse_excel(path: Path) -> str:
         output_lines.append(f"## シート: {sheet_name}")
         output_lines.append("")
 
-        for row in ws.iter_rows():
-            # read_only=True モードでは結合セルの非主セルが EmptyCell として返され
-            # .row 属性を持たない。先頭から .row を持つセルを探して行番号を取得する。
-            row_num = next((c.row for c in row if hasattr(c, "row")), None)
-            if row_num is None:
-                continue
+        for row_idx, row in enumerate(ws.iter_rows(), start=1):
             cells: list[str] = []
 
             for cell in row:
@@ -85,7 +80,7 @@ def _parse_excel(path: Path) -> str:
             if all(c in ("(空)", "(結合)") for c in cells):
                 continue
 
-            output_lines.append(f"行{row_num} | {'  |  '.join(cells)}")
+            output_lines.append(f"行{row_idx} | {'  |  '.join(cells)}")
 
         output_lines.append("")
 
