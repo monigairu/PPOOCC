@@ -1,0 +1,124 @@
+sheet_name: KNI_1G_02
+excel_file: F3_knowledge.xlsx
+excel_sheet: KNI_1G_02
+display_name: ナレッジ_03_電力別ナレッジ履歴_1G/管理G_費用請求時
+frame: F3
+layout:
+  title_row: 1
+  meta_row: 3
+  legend_rows:
+  - 3
+  - 4
+  header_row: 6
+  data_start_row: 7
+  data_end_row: null
+meta_cells:
+  electric_company:
+    label: 電力会社
+    cell: C3
+fixed_columns:
+- key: id
+  label: ID
+  col: B
+  dtype: string
+  required: true
+  note: '例: 03_1G_01_0001'
+- key: start_date
+  label: 起票日
+  col: C
+  dtype: date
+  required: false
+- key: dept_group
+  label: 起票者所属G
+  col: D
+  dtype: string
+  required: false
+  note: '例: 1G'
+- key: author
+  label: 起票者
+  col: E
+  dtype: string
+  required: false
+  note: '例: 廃炉太郎'
+- key: ref_knowledge_id
+  label: 参照先ナレッジID
+  col: F
+  dtype: string
+  required: false
+  note: '例: 03_1G_0002'
+- key: submission_timing
+  label: 提出タイミング
+  col: G
+  dtype: string
+  required: false
+  note: '例: 計画申請時'
+- key: confirm_year
+  label: 確認年度
+  col: H
+  dtype: integer
+  required: false
+  note: '例: 2024'
+- key: plant_site
+  label: 該当発電所
+  col: I
+  dtype: string
+  required: false
+- key: plant_unit
+  label: 該当プラント
+  col: J
+  dtype: string
+  required: false
+- key: cost_category
+  label: 該当費目
+  col: K
+  dtype: string
+  required: false
+  note: '例: 維持管理費'
+- key: construction_name
+  label: 該当工事名
+  col: L
+  dtype: string
+  required: false
+- key: reference_url
+  label: 該当資料
+  col: M
+  dtype: string
+  required: false
+  note: URLまたはファイルパス
+repeating_qa_columns:
+  max_rounds: 6
+  start_col: N
+  col_per_round: 2
+  fields:
+  - key: nuro_comment
+    label_template: NuRO確認内容（{round}回目）
+    col_offset: 0
+    dtype: string
+    required: false
+    color_hint: white
+  - key: denryoku_reply
+    label_template: 電力回答内容（{round}回目）
+    col_offset: 1
+    dtype: string
+    required: false
+    color_hint: yellow
+cell_color_legend:
+  green:
+    rgb: 00B050
+    meaning: NuROによる記載必須の項目
+  light_green:
+    rgb: E2EFDA
+    meaning: NuROによる任意記載の項目
+  yellow:
+    rgb: FFFF00
+    meaning: 電力による記載項目
+loader_config:
+  skip_empty_rows: true
+  id_column: B
+  merge_cell_handling: fill_down
+  encoding: utf-8
+  engine: openpyxl
+output_model:
+  table_key: f3_kni_1g_02
+  primary_key: message_id
+  flatten_qa: true

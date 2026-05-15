@@ -1,0 +1,211 @@
+sheet_name: KNS_1G
+excel_file: F2_knowledge.xlsx
+excel_sheet: KNS_1G
+display_name: ナレッジ_02_問合せ履歴・NuRo内知見管理（NuRO内有）_1G/管理G
+frame: F2
+layout:
+  title_row: 1
+  legend_rows:
+  - 3
+  - 4
+  header_row: 6
+  data_start_row: 7
+  data_end_row: null
+cell_color_legend:
+  green:
+    meaning: NuROによる記載必須の項目
+  striped:
+    meaning: 記載不要（区分によって不要な列）
+  plain:
+    meaning: NuROによる任意記載の項目
+fixed_columns:
+- key: id
+  label: ID
+  col: B
+  dtype: string
+  required: true
+  note: '例: 02_1G_0001'
+- key: start_date
+  label: 起票日
+  col: C
+  dtype: date
+  required: false
+  note: YYYY/M/D 形式
+- key: category
+  label: 区分
+  col: D
+  dtype: string
+  required: true
+  allowed_values:
+  - 問合せ履歴管理
+  - NuRo内知見
+- key: dept_group
+  label: 起票者所属G
+  col: E
+  dtype: string
+  required: false
+  allowed_values:
+  - 1G
+  - 管理G
+  - 2G
+- key: author
+  label: 起票者
+  col: F
+  dtype: string
+  required: false
+- key: business_category
+  label: 業務カテゴリ
+  col: G
+  dtype: string
+  required: false
+  allowed_values:
+  - 委員会報告
+  - 設定確認
+  - 利益指導委任
+  - 工事情報提供
+  - 実績根拠確認
+  - 支払請求書確認
+  - 国内情報
+  - 海外情報
+  - 国内・海外情報
+  - 影響因子特定
+  - データ抽出
+  - データ入力・様式提出
+- key: related_group
+  label: 関連グループ名
+  col: H
+  dtype: string
+  required: false
+  allowed_values:
+  - 1G
+  - 1G・管理G
+  - 管理G
+  - 2G
+- key: ref_knowledge_id
+  label: 参照先ナレッジID
+  col: I
+  dtype: string
+  required: false
+  note: '例: 02_1G_0002、または「－」'
+- key: from_party
+  label: From
+  col: J
+  dtype: string
+  required: false
+  allowed_values:
+  - NuRO
+  - 日本原子力発電
+  - 中部電力
+  - 中国電力
+  - 東北電力
+  - 東京電力
+  - 関西電力
+  - 四国電力
+  - 九州電力
+  - 北海道電力
+  - 北陸電力
+  note: 問合せ履歴管理の場合のみ有効
+- key: to_party
+  label: To
+  col: K
+  dtype: string
+  required: false
+  note: '例: NuROや委受託企業XX。問合せ履歴管理の場合のみ有効'
+- key: reference_url
+  label: 該当資料
+  col: L
+  dtype: string
+  required: false
+- key: priority
+  label: 優先度
+  col: M
+  dtype: string
+  required: false
+  allowed_values:
+  - 高
+  - 中
+  - 低
+- key: status
+  label: ステータス
+  col: N
+  dtype: string
+  required: false
+  allowed_values:
+  - 未対応
+  - 対応中
+  - 対応済
+  - 保留中
+- key: title
+  label: タイトル
+  col: O
+  dtype: string
+  required: false
+- key: contact_medium
+  label: 連絡媒体
+  col: P
+  dtype: string
+  required: false
+  allowed_values:
+  - メール
+  - 電話
+  - 対面（口頭）
+  - その他
+  note: 問合せ履歴管理の場合のみ有効
+- key: related_material_1
+  label: 関連資料①
+  col: Q
+  dtype: string
+  required: false
+- key: related_material_2
+  label: 関連資料②
+  col: R
+  dtype: string
+  required: false
+- key: related_material_3
+  label: 関連資料③
+  col: S
+  dtype: string
+  required: false
+- key: phenomenon_summary
+  label: 事象概要
+  col: T
+  dtype: string
+  required: false
+  note: NuRo内知見の場合に有効
+- key: judgment_basis
+  label: 判断基準・対応方針
+  col: U
+  dtype: string
+  required: false
+  note: NuRo内知見の場合に有効
+- key: response_result
+  label: 対応結果
+  col: V
+  dtype: string
+  required: false
+  note: NuRo内知見の場合に有効
+repeating_qa_columns:
+  max_rounds: 6
+  start_col: W
+  col_per_round: 2
+  fields:
+  - key: question_comment
+    label_template: 質問・確認内容（{round}回目）
+    col_offset: 0
+    dtype: string
+    required: false
+  - key: answer_reply
+    label_template: 回答内容（{round}回目）
+    col_offset: 1
+    dtype: string
+    required: false
+loader_config:
+  skip_empty_rows: true
+  id_column: B
+  merge_cell_handling: fill_down
+  encoding: utf-8
+  engine: openpyxl
+output_model:
+  table_key: f2_kns_1g
+  primary_key: message_id
+  flatten_qa: true

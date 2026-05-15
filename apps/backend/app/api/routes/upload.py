@@ -11,9 +11,11 @@ import uuid
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, UploadFile, File, Form, Path as FastAPIPath, Query
+from google.cloud import firestore
 
 from apps.backend.app.api.models import UploadResponse, CellMapping
 from apps.backend.app.agents.data_extractor.data_extractor_agent import extract_data
+from apps.backend.app.core.firestore_client import get_firestore_client
 from apps.backend.app.core.settings import OUTPUT_DIR, UPLOAD_DIR, TEMPLATE_PATH
 from apps.backend.app.pipelines.form_generation_pipeline import generate_form_from_dict
 
@@ -27,6 +29,9 @@ async def upload_and_generate(
     file: UploadFile = File(...),
     sheet_name: str = Form(default="MRC1", pattern=r"^[a-zA-Z0-9_\-]+$"),
     frame_name: str = Form(default="frameB", pattern=r"^[a-zA-Z0-9_\-]+$"),
+    utility_name: str = Form(default="未設定"),
+    # TODO(Step2): フロントエンド実装時に電力会社名の入力欄を追加して
+    #              utility_name を必須パラメータとして送信するよう修正すること
 ):
     """
     ファイルをアップロードしてNuRO様式を自動生成する。
@@ -37,6 +42,7 @@ async def upload_and_generate(
         - .docx  → data_extractorでJSONに変換してから転記
 
     frame_name 配下の全YAML定義シートを処理する。
+    転記完了後にFirestoreへセッション情報を保存する（レビュー機能との連携用）。
     """
     filename = file.filename or "unknown"
     # pathlib.Path(filename).suffixを使って安全に拡張子を取得
@@ -91,6 +97,15 @@ async def upload_and_generate(
     primary_sheet = processed_sheets[0] if processed_sheets else sheet_name
     sheets_label = ", ".join(processed_sheets) if processed_sheets else sheet_name
 
+    # Firestoreにセッション情報を保存（レビュー機能との連携用）
+    _save_session_to_firestore(
+        session_id=session_id,
+        utility_name=utility_name,
+        frame_name=safe_frame,
+        sheet_name=primary_sheet,
+        mappings=raw_mappings,
+    )
+
     return UploadResponse(
         session_id=session_id,
         frame_name=safe_frame,
@@ -101,6 +116,33 @@ async def upload_and_generate(
             f"（入力: {filename}、シート: {sheets_label}）"
         ),
     )
+
+
+def _save_session_to_firestore(
+    session_id: str,
+    utility_name: str,
+    frame_name: str,
+    sheet_name: str,
+    mappings: list[dict],
+) -> None:
+    """
+    転記完了後にセッション情報をFirestoreへ保存する。
+    Firestoreへの保存失敗は転記結果の返却を妨げない（ログ出力のみ）。
+    """
+    try:
+        db = get_firestore_client()
+        db.collection("sessions").document(session_id).set({
+            "session_id": session_id,
+            "utility_name": utility_name,
+            "frame_name": frame_name,
+            "sheet_name": sheet_name,
+            "mappings": mappings,
+            "created_at": firestore.SERVER_TIMESTAMP,
+            "reviewed": False,
+        })
+    except Exception as e:
+        # Firestoreへの保存失敗は転記結果を壊さない
+        print(f"[WARNING] Firestoreへのセッション保存に失敗しました（session_id={session_id}）: {e}")
 
 
 @router.get("/download/{session_id}")

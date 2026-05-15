@@ -1,4 +1,5 @@
 import { useState, useRef, useEffect } from "react";
+import { useNavigate, useLocation } from "react-router-dom";
 
 // ── 定数 ──────────────────────────────────────
 const API_BASE = "http://localhost:8000/api";
@@ -106,6 +107,54 @@ const styles = {
     overflow: "hidden",
   },
 };
+
+// ── 共通ナビゲーションヘッダー ─────────────────
+export function AppHeader({ rightSlot }) {
+  const navigate = useNavigate();
+  const location = useLocation();
+  const currentPath = location.pathname;
+
+  const tabs = [
+    { path: "/",       label: "様式自動作成①" },
+    { path: "/review", label: "事前レビュー" },
+  ];
+
+  return (
+    <header style={styles.header}>
+      <span style={styles.headerBadge}>PoC</span>
+      <h1 style={styles.headerTitle}>NuRO</h1>
+
+      {/* ナビタブ */}
+      <div style={{ display: "flex", gap: "4px", marginLeft: "12px" }}>
+        {tabs.map(({ path, label }) => {
+          const isActive = currentPath === path;
+          return (
+            <button
+              key={path}
+              onClick={() => navigate(path)}
+              style={{
+                padding: "5px 14px",
+                borderRadius: "6px",
+                border: `1px solid ${isActive ? COLORS.accent : COLORS.border}`,
+                background: isActive ? COLORS.accentSoft : "transparent",
+                color: isActive ? COLORS.accent : COLORS.textMuted,
+                fontSize: "12px",
+                fontWeight: isActive ? 700 : 400,
+                cursor: "pointer",
+                transition: "all 0.15s",
+                fontFamily: "inherit",
+              }}
+            >
+              {label}
+            </button>
+          );
+        })}
+      </div>
+
+      <span style={styles.headerSub}>{rightSlot}</span>
+    </header>
+  );
+}
 
 // ── アップロードゾーン ─────────────────────────
 function UploadZone({ onFileSelect, file, isLoading }) {
@@ -769,18 +818,16 @@ export default function App() {
       `}</style>
 
       {/* ヘッダー */}
-      <header style={styles.header}>
-        <span style={styles.headerBadge}>PoC</span>
-        <h1 style={styles.headerTitle}>NuRO 様式自動作成①</h1>
-        <span style={styles.headerSub}>
-          {sessionId
+      <AppHeader
+        rightSlot={
+          sessionId
             ? <a href={`${API_BASE}/download/${sessionId}?frame_name=${frameName}`}
                  style={{ color: COLORS.accent, textDecoration: "none", fontSize: "12px" }}>
                 ⬇ Excelをダウンロード
               </a>
-            : "MRC1 — 計実_様式2_PBG_工事概要①"}
-        </span>
-      </header>
+            : <span style={{ fontSize: "12px", color: COLORS.textMuted }}>MRC1 — 計実_様式2_PBG_工事概要①</span>
+        }
+      />
 
       <div style={styles.body}>
         {/* ── 左パネル: アップロード ── */}
