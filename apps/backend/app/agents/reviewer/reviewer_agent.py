@@ -1,17 +1,41 @@
 """
 レビューエージェント（Agentic RAG 軽量版）
 
-4つの観点（Tool）を固定順で実行し、結果をまとめて Gemini に渡して指摘を生成する。
+5つの観点（Tool）を固定順で実行し、結果をまとめて Gemini に渡して指摘を生成する。
 
-Phase 1（現在）：固定順で全 Tool 実行 → Gemini でレビュー生成
-Phase 2（PoC後半）：knowledge_loader の内部実装を Vertex AI Search に切り替え
-将来検討：Toolの動的選択・本格 Agentic 化・Graph RAG
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+現在のRAG方式：構造化フィルタ型RAG（Phase 1）
 
-観点（Tool）の追加方法：
+【Phase 1の制約】
+① 同義語・表記ゆれに対応できない
+   「費用低減」と「コスト削減」は別単語として扱われる
+   → Phase 2のハイブリッド検索（BM25+ベクトル）で解決予定
+
+② reactor_type（炉型）の絞り込みが機能しない
+   F3スキーマに reactor_type 列が未定義
+   → Phase 2でスキーマを拡張して対応
+
+③ 補足資料の写真・図面情報が使えない
+   Tool5でテキストのみ取得。写真は has_images フラグのみ記録
+   → Phase 3でGemini 2.0 Flashのマルチモーダル機能で対応
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Phase 2（PoC後半予定）：
+  - Vertex AI Search + ハイブリッド検索（BM25+ベクトル）+ Reranking
+  - knowledge_loader の内部実装のみ差し替え（このファイルへの影響なし）
+  - Tool の動的選択（AgentExecutor 化）の検討
+
+Phase 3（本番運用後）：
+  - Gemini 2.0 Flash/Pro のマルチモーダルで写真・図面を処理
+  - Document AI で解体状況図（PPTX）の構造解析
+  - Graph RAGの必要性を評価（データ蓄積後に判断）
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Toolの追加方法：
     1. knowledge_loader.py に新しい読み込み関数を追加
     2. run_review() 内に「Tool N: ...」のブロックを追加
     3. _build_prompt() のコンテキスト組み立て部分に追記
-    reviewer_agent.py のインターフェース（run_review の引数・戻り値）は変えない
+    このファイルのインターフェース（run_review の引数・戻り値）は変えない
 """
 from __future__ import annotations
 
@@ -213,6 +237,16 @@ async def run_review(
         limit=20,
     )
 
+    # ── Tool 5: 補足資料（テキスト部分のみ、写真はPhase3対応） ────────
+    # data/knowledge/supplement/ が存在しない場合は空リストが返る（エラーなし）
+    # Phase 3：Gemini 2.0 Flash のマルチモーダルで has_images=True の資料も処理
+    supplement_info = knowledge_loader.load_supplement(
+        caller_role="NuRO",
+        utility_name=utility_name,
+        fee_type=fee_type,
+        limit=20,
+    )
+
     # ── Gemini でレビュー生成 ──────────────────────────────────────────
     prompt = _build_prompt(
         mappings=mappings,
@@ -220,6 +254,7 @@ async def run_review(
         similar_cases=similar_cases,
         plan_diffs=plan_diffs,
         f2_knowledge=f2_knowledge,
+        supplement_info=supplement_info,
         utility_name=utility_name,
         sheet_name=sheet_name,
     )
@@ -243,6 +278,7 @@ def _build_prompt(
     similar_cases: list[dict],
     plan_diffs: list[dict],
     f2_knowledge: list[dict],
+    supplement_info: list[dict],
     utility_name: str,
     sheet_name: str,
 ) -> str:
@@ -251,6 +287,7 @@ def _build_prompt(
     similar_text = json.dumps(similar_cases, ensure_ascii=False, indent=2) if similar_cases else "（なし）"
     plan_diff_text = json.dumps(plan_diffs, ensure_ascii=False, indent=2) if plan_diffs else "（なし、または計画提出のため差分チェック不要）"
     f2_text = json.dumps(f2_knowledge, ensure_ascii=False, indent=2) if f2_knowledge else "（なし）"
+    supplement_text = json.dumps(supplement_info, ensure_ascii=False, indent=2) if supplement_info else "（なし）"
 
     return f"""あなたはNuRO（廃炉管理機構）の審査担当AIです。
 電力会社（{utility_name}）が提出した{sheet_name}様式の転記結果をレビューしてください。
@@ -272,6 +309,9 @@ def _build_prompt(
 ### Tool4: NuROナレッジ（F2）
 {f2_text}
 
+### Tool5: 補足資料（工事概要・テキスト情報）
+{supplement_text}
+
 ## 指示
 
 上記のナレッジと転記結果を照合し、以下の観点で指摘事項をリストアップしてください。
@@ -279,6 +319,31 @@ def _build_prompt(
 1. 過去に同様の指摘があった箇所（Tool1・Tool2参照）
 2. 計画値と実績値の乖離が大きい箇所（Tool3参照）
 3. 必須記載が不十分な箇所（Tool4・ナレッジ参照）
+4. 補足資料の内容と転記結果に不整合がある箇所（Tool5参照）
+
+## AI知見で指摘する場合の制約（必ず守ること）
+
+ナレッジが（なし）の場合でも、以下の観点で指摘を行ってください。
+ただし、下記のルールを厳守してください。
+
+### 指摘できる観点（ナレッジなしの場合）
+
+- 記載の具体性が不十分：「〜に努める」「適切に実施する」等の曖昧な表現のみで、具体的な施策・手順・数値が記載されていない
+- 論理的な不整合：計画時の記載と実績時の記載が矛盾している、または説明が繋がっていない
+- 空欄・未記載：通常記載が期待される項目が空欄になっている
+
+### 絶対に行ってはいけないこと（ハルシネーション防止）
+
+- 具体的な法令条文・通達番号・数値基準（「〇〇条」「〇〇%以内」等）を根拠にした指摘
+- 確認できない情報を「規制で定められている」「法令上必要」と表現すること
+- 参照ナレッジに記載されていない事実を「過去に指摘された」と表現すること
+- ナレッジ（なし）なのに knowledge_source を "F2" や "F3" と記載すること
+
+### ナレッジ参照なしで指摘する場合の出力ルール
+
+- severity: 必ず **"要確認"**（断定を避ける）
+- evidence: 必ず **"AI判断（ナレッジ参照なし）："** で始め、判断の根拠を簡潔に述べる
+- knowledge_source: **"AI知見"** とする
 
 ## 出力形式（必ずこのJSONのみを返してください。前後に説明文を入れないでください）
 
@@ -287,16 +352,19 @@ def _build_prompt(
     {{
       "field_name": "フィールド名",
       "cell_address": "セル番地（例: K22）",
-      "severity": "要確認",
+      "severity": "要確認 または AIからの指摘",
       "comment": "指摘内容（自然言語で具体的に）",
-      "evidence": "根拠（ナレッジのIDや内容）",
-      "knowledge_source": "F2 または F3 または 計画差分"
+      "evidence": "根拠（ナレッジ引用 または 'AI判断（ナレッジ参照なし）: 〇〇のため'）",
+      "knowledge_source": "F2 または F3 または 計画差分 または AI知見"
     }}
   ],
   "summary": "全体的なレビュー所見（2〜3文）"
 }}
 
-severity は "要確認"（NuRO判断が必要）または "AIからの指摘"（AIが根拠を持って指摘）のいずれかを使ってください。
+severity の使い分け：
+  "要確認"     → NuROの判断が必要な指摘、またはナレッジ参照なしの指摘
+  "AIからの指摘" → ナレッジに明確な根拠がある場合のみ使用可能
+
 指摘がない場合は review_items を空リストにしてください。
 """
 

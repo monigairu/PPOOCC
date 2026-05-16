@@ -1,21 +1,49 @@
 """
 ナレッジ読み込みモジュール
 
-Phase 1（現在）：スキーマYAML駆動でExcelを読み込み、QAを縦持ちに展開して返す
-Phase 2（PoC後半予定）：Vertex AI Searchへ差し替え（このファイルのI/Fは変更しない）
-将来検討：本格Agentic化・Graph RAGの評価
+現在の実装（Phase 1）：構造化フィルタ型RAG
+  - スキーマYAML駆動でExcelを直接読み込み
+  - 権限フィルタ（caller_role/utility_name）＋構造化フィルタ（fee_type）で絞り込み
+  - QAを縦持ち展開（1メッセージ=1チャンク）してGeminiプロンプトに直接注入
 
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+【Phase 1の制約】
+
+① 同義語・表記ゆれに対応できない
+   「費用低減」と「コスト削減」は別単語として扱われる
+   → Phase 2のハイブリッド検索（BM25+ベクトル）で解決予定
+
+② reactor_type（炉型）の絞り込みが機能しない
+   F3スキーマに reactor_type に相当する列が定義されていない
+   → Phase 2でスキーマを拡張して対応
+
+③ 補足資料の写真・図面情報が使えない
+   Excelに貼り付けられた写真は現状では無視される
+   → Phase 3でGemini 2.0 Flashのマルチモーダル機能で対応
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Phase 2（PoC後半予定）：
+  - Vertex AI Search + ハイブリッド検索（BM25+ベクトル）+ Reranking
+  - 補足資料のテキスト情報を Tool5 として追加
+  - reactor_type の絞り込みをスキーマ拡張で実現
+  - このファイルのI/F（引数・戻り値）は変更しない
+
+Phase 3（本番運用後）：
+  - Gemini 2.0 Flash/Pro のマルチモーダルで写真・図面を処理
+  - Document AI で解体状況図（PPTX）の構造解析
+  - Graph RAGの必要性を評価（データ蓄積後に判断）
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 本番移行時の注意：
     現在は caller_role="NuRO" をエンドポイント側で固定して呼び出している。
     本番では FastAPI の Depends で検証済み JWT から caller_role を取得して渡す。
-    このファイル（knowledge_loader.py）の変更は不要で、エンドポイントに
-    user=Depends(get_current_user) を追加して caller_role=user["role"] に変更するだけ。
+    このファイルの変更は不要。エンドポイントに user=Depends(get_current_user) を
+    追加して caller_role=user["role"] に変更するだけ。
 
 スキーマファイル検出ルール：
     data/knowledge/schema/f3_*_schema.yaml → F3ナレッジ（電力別問合せ履歴）
     data/knowledge/schema/f2_*_schema.yaml → F2ナレッジ（NuRO内有の知見）
-    対応するExcelファイル: data/knowledge/{FRAME}_{sheet_name}.xlsx
-    例: f3_kni_1g_01_schema.yaml → data/knowledge/F3_KNI_1G_01.xlsx
+    対応するExcelファイル: data/knowledge/{excel_file キー or FRAME_sheet_name}.xlsx
 """
 from __future__ import annotations
 
@@ -328,6 +356,67 @@ def load_f2(
         all_records.extend(records)
 
     return all_records[:limit]
+
+
+def load_supplement(
+    caller_role: str,
+    utility_name: str | None = None,
+    fee_type: str | None = None,
+    limit: int = 20,
+) -> list[dict[str, Any]]:
+    """
+    補足資料（工事概要Excel）からテキスト情報を読み込む。
+
+    Phase 1：テキスト情報のみ抽出（写真は「添付あり」フラグのみ記録）
+    Phase 3：Gemini 2.0 Flash のマルチモーダルで写真・図面も処理予定
+
+    対象ファイル：data/knowledge/supplement/ 以下の全 Excel ファイル
+    シート名が工事ID（例: 2024-1-002）、A1セルが工事名という構造を想定。
+
+    Args:
+        caller_role:   "NuRO" or "電力"（F2と同じ権限制御。電力は空リストを返す）
+        utility_name:  将来の権限制御用（Phase 1では未使用）
+        fee_type:      費目での絞り込み（テキスト内部分一致）
+        limit:         返す件数の上限
+    """
+    if caller_role == "電力":
+        return []
+
+    supplement_dir = _KNOWLEDGE_DIR / "supplement"
+    if not supplement_dir.exists():
+        logger.debug("補足資料ディレクトリが存在しません（スキップ）: %s", supplement_dir)
+        return []
+
+    records: list[dict] = []
+    for file_path in sorted(supplement_dir.glob("*.xlsx")):
+        try:
+            xl = pd.ExcelFile(file_path, engine="openpyxl")
+            for sheet in xl.sheet_names:
+                df = xl.parse(sheet, header=None, dtype=str).fillna("")
+                construction_name = df.iat[0, 0].strip() if len(df) > 0 else sheet
+                # 全テキストセルを結合（短い断片は除外）
+                text_parts = [
+                    cell for row in df.values for cell in row
+                    if isinstance(cell, str) and len(cell.strip()) > 3
+                ]
+                text_content = " ".join(text_parts)[:500]
+
+                # 費目フィルタ（テキスト内部分一致）
+                if fee_type and fee_type not in text_content:
+                    continue
+
+                records.append({
+                    "source_file": file_path.name,
+                    "sheet_name": sheet,
+                    "construction_name": construction_name,
+                    "text_content": text_content,
+                    # Phase 3：Gemini 2.0 Flash のマルチモーダルで処理予定
+                    "has_images": True,
+                })
+        except Exception as e:
+            logger.warning("補足資料の読み込みエラー: %s (%s)", file_path, e)
+
+    return records[:limit]
 
 
 def load_all(
