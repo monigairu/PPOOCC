@@ -74,7 +74,8 @@ class ReviewResponse(BaseModel):
     review_items: list[ReviewItem]
     summary: str
     reviewed_at: str
-    mappings: list[dict] = []   # Firestoreから取得した転記結果（グリッド表示用）
+    mappings: list[dict] = []           # 転記結果（グリッド表示用）
+    retrieval_trace: list[dict] = []    # 各ToolのRAG取得ログ（RAG詳細パネル用）
 
 
 class FeedbackRequest(BaseModel):
@@ -82,6 +83,7 @@ class FeedbackRequest(BaseModel):
     item_id: str
     decision: str           # "accept"（承諾）or "reject"（棄却）
     comment: str = ""       # NuROのコメント（任意）
+    session_id: str = ""    # 直接パス取得用（collection_groupインデックス不要）
 
 
 class FeedbackResponse(BaseModel):
@@ -89,10 +91,17 @@ class FeedbackResponse(BaseModel):
     status: str             # "saved"（Firestore保存）or "discarded"（破棄）
 
 
+class FeedbackSyncRequest(BaseModel):
+    """保存ボタン押下時の一括フィードバック同期リクエスト"""
+    feedbacks: list[dict]   # [{"item_id": "...", "decision": "accept"|"reject"}, ...]
+    session_id: str = ""    # 直接パス取得用
+
+
 class SessionSummary(BaseModel):
     """NuRO画面のセッション一覧表示用"""
     session_id: str
     utility_name: str
+    session_name: str = ""   # 転記時に工事件名などから自動生成
     frame_name: str
     sheet_name: str
     created_at: str

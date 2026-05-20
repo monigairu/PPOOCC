@@ -69,81 +69,151 @@ function Spinner({ size = 14, color = T.teal }) {
   );
 }
 
-// ── 左パネル: セッション一覧 ──────────────────────────────────────────────
-function SessionSidebar({ sessions, selectedSession, isLoadingSessions, onSelect, onStartReview, isReviewing }) {
+// ── 左パネル: セッション一覧（未レビュー/レビュー済みタブ切替） ─────────────
+function SessionSidebar({ sessions, selectedSession, isLoadingSessions, onSelect, onStartReview, onSaveReview, isReviewing, isSaving, hasReviewItems, activeTab, onTabChange }) {
+  const unreviewed = sessions.filter(s => s.review_status !== "completed");
+  const reviewed   = sessions.filter(s => s.review_status === "completed");
+  const isSelectedUnreviewed = selectedSession && selectedSession.review_status !== "completed";
+  const isSelectedCompleted  = selectedSession && selectedSession.review_status === "completed";
+  const displayList = activeTab === "reviewed" ? reviewed : unreviewed;
+
+  const SessionItem = ({ s }) => {
+    const isSelected = selectedSession?.session_id === s.session_id;
+    const isCompleted = s.review_status === "completed";
+    const displayName = s.session_name || s.utility_name || "無題のセッション";
+    return (
+      <div
+        onClick={() => onSelect(s)}
+        style={{
+          padding: "10px 16px",
+          borderBottom: `1px solid ${T.border}`,
+          cursor: "pointer",
+          background: isSelected ? T.tealSoft : "transparent",
+          borderLeft: isSelected ? `3px solid ${T.teal}` : "3px solid transparent",
+          transition: "all 0.15s",
+        }}
+        onMouseEnter={(e) => { if (!isSelected) e.currentTarget.style.background = T.surfaceHover; }}
+        onMouseLeave={(e) => { if (!isSelected) e.currentTarget.style.background = "transparent"; }}
+      >
+        <div style={{ fontSize: 12, fontWeight: 600, color: isSelected ? T.tealLight : T.text, marginBottom: 4, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+          {displayName}
+        </div>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+          <span style={{ fontSize: 10, color: T.textDim }}>
+            {s.created_at ? new Date(s.created_at).toLocaleDateString("ja-JP", { month: "2-digit", day: "2-digit" }) : ""}
+          </span>
+          {s.review_status === "in_progress" && s.progress && s.progress.total > 0 && (
+            <span style={{ fontSize: 10, padding: "1px 7px", borderRadius: 8, background: "rgba(245,158,11,0.12)", border: "1px solid rgba(245,158,11,0.35)", color: T.yellow }}>
+              {s.progress.decided}/{s.progress.total}件判定済
+            </span>
+          )}
+          {isCompleted && (
+            <span style={{ fontSize: 10, padding: "1px 7px", borderRadius: 8, background: T.greenSoft, border: `1px solid ${T.green}60`, color: T.green }}>
+              完了
+            </span>
+          )}
+        </div>
+      </div>
+    );
+  };
+
   return (
     <div style={{ width: 260, flexShrink: 0, borderRight: `1px solid ${T.border}`, display: "flex", flexDirection: "column", background: T.surface, overflow: "hidden" }}>
-      <div style={{ padding: "14px 18px", borderBottom: `1px solid ${T.border}`, fontSize: 11, fontWeight: 700, letterSpacing: "0.1em", textTransform: "uppercase", color: T.textMuted }}>
-        レビュー待ちセッション
+      {/* タブ */}
+      <div style={{ display: "flex", borderBottom: `1px solid ${T.border}`, flexShrink: 0 }}>
+        {[
+          { key: "unreviewed", label: "未レビュー", count: unreviewed.length },
+          { key: "reviewed",   label: "レビュー済み", count: reviewed.length },
+        ].map(({ key, label, count }) => (
+          <button
+            key={key}
+            onClick={() => onTabChange(key)}
+            style={{
+              flex: 1, padding: "10px 4px",
+              border: "none",
+              borderBottom: `2px solid ${activeTab === key ? T.teal : "transparent"}`,
+              background: "transparent",
+              color: activeTab === key ? T.tealLight : T.textMuted,
+              fontSize: 11, fontWeight: activeTab === key ? 700 : 400,
+              cursor: "pointer", transition: "all 0.15s", fontFamily: "inherit",
+              display: "flex", alignItems: "center", justifyContent: "center", gap: 5,
+            }}
+          >
+            {label}
+            <span style={{
+              fontSize: 10, padding: "0px 6px", borderRadius: 10,
+              background: activeTab === key ? T.teal : T.border,
+              color: activeTab === key ? "#fff" : T.textMuted,
+            }}>{count}</span>
+          </button>
+        ))}
       </div>
 
+      {/* セッションリスト */}
       <div style={{ flex: 1, overflow: "auto" }}>
         {isLoadingSessions ? (
           <div style={{ display: "flex", alignItems: "center", justifyContent: "center", padding: 24, gap: 8 }}>
             <Spinner /> <span style={{ fontSize: 12, color: T.textMuted }}>取得中...</span>
           </div>
-        ) : sessions.length === 0 ? (
-          <div style={{ padding: 20, textAlign: "center", fontSize: 12, color: T.textDim }}>
-            レビュー待ちセッションはありません
-          </div>
+        ) : displayList.length === 0 ? (
+          <div style={{ padding: 20, textAlign: "center", fontSize: 12, color: T.textDim }}>なし</div>
         ) : (
-          sessions.map((s) => {
-            const isSelected = selectedSession?.session_id === s.session_id;
-            return (
-              <div
-                key={s.session_id}
-                onClick={() => onSelect(s)}
-                style={{
-                  padding: "12px 16px",
-                  borderBottom: `1px solid ${T.border}`,
-                  cursor: "pointer",
-                  background: isSelected ? T.tealSoft : "transparent",
-                  borderLeft: isSelected ? `3px solid ${T.teal}` : "3px solid transparent",
-                  transition: "all 0.15s",
-                }}
-                onMouseEnter={(e) => { if (!isSelected) e.currentTarget.style.background = T.surfaceHover; }}
-                onMouseLeave={(e) => { if (!isSelected) e.currentTarget.style.background = "transparent"; }}
-              >
-                <div style={{ fontSize: 13, fontWeight: 600, color: T.text, marginBottom: 4 }}>
-                  {s.utility_name}
-                </div>
-                <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-                  <span style={{ fontSize: 10, padding: "1px 6px", borderRadius: 3, background: T.tealSoft, border: `1px solid ${T.teal}`, color: T.tealLight }}>
-                    {s.sheet_name}
-                  </span>
-                  <span style={{ fontSize: 10, color: T.textDim }}>
-                    {s.created_at ? new Date(s.created_at).toLocaleDateString("ja-JP") : ""}
-                  </span>
-                </div>
-              </div>
-            );
-          })
+          displayList.map(s => <SessionItem key={s.session_id} s={s} />)
         )}
       </div>
 
-      {/* レビュー開始ボタン */}
-      <div style={{ padding: 14, borderTop: `1px solid ${T.border}` }}>
+      {/* ボタンエリア */}
+      <div style={{ padding: "10px 12px", borderTop: `1px solid ${T.border}`, display: "flex", flexDirection: "column", gap: 8 }}>
+        {/* 未レビュー: レビュー結果を保存 */}
+        {isSelectedUnreviewed && hasReviewItems && (
+          <button
+            onClick={onSaveReview}
+            disabled={isSaving}
+            style={{
+              width: "100%", padding: "8px", borderRadius: 8, border: `1px solid ${T.green}`,
+              background: isSaving ? T.borderLight : T.greenSoft,
+              color: isSaving ? T.textDim : T.green,
+              fontSize: 12, fontWeight: 700,
+              cursor: isSaving ? "not-allowed" : "pointer",
+              display: "flex", alignItems: "center", justifyContent: "center",
+              gap: 6, transition: "all 0.15s", fontFamily: "inherit",
+            }}
+          >
+            {isSaving ? <><Spinner color={T.green} size={12} />保存中...</> : "✓ レビュー結果を保存"}
+          </button>
+        )}
+        {/* レビュー済み: 上書き保存 */}
+        {isSelectedCompleted && hasReviewItems && (
+          <button
+            onClick={onSaveReview}
+            disabled={isSaving}
+            style={{
+              width: "100%", padding: "8px", borderRadius: 8,
+              border: `1px solid ${T.teal}`,
+              background: isSaving ? T.borderLight : T.tealSoft,
+              color: isSaving ? T.textDim : T.tealLight,
+              fontSize: 12, fontWeight: 700,
+              cursor: isSaving ? "not-allowed" : "pointer",
+              display: "flex", alignItems: "center", justifyContent: "center",
+              gap: 6, transition: "all 0.15s", fontFamily: "inherit",
+            }}
+          >
+            {isSaving ? <><Spinner color={T.teal} size={12} />保存中...</> : "↑ 上書き保存"}
+          </button>
+        )}
         <button
           onClick={onStartReview}
           disabled={!selectedSession || isReviewing}
           style={{
-            width: "100%",
-            padding: "10px",
-            borderRadius: 8,
-            border: "none",
+            width: "100%", padding: "10px", borderRadius: 8, border: "none",
             background: !selectedSession || isReviewing
               ? T.borderLight
               : `linear-gradient(135deg, ${T.teal}, ${T.tealLight})`,
             color: !selectedSession || isReviewing ? T.textDim : "#fff",
-            fontSize: 13,
-            fontWeight: 700,
+            fontSize: 13, fontWeight: 700,
             cursor: !selectedSession || isReviewing ? "not-allowed" : "pointer",
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            gap: 8,
-            transition: "all 0.15s",
-            fontFamily: "inherit",
+            display: "flex", alignItems: "center", justifyContent: "center",
+            gap: 8, transition: "all 0.15s", fontFamily: "inherit",
           }}
         >
           {isReviewing ? <><Spinner color="#fff" />AIレビュー中...</> : "▶ レビュー開始"}
@@ -232,8 +302,10 @@ function ReviewGridView({ template, templateError, mappings, reviewItems, select
                   const isClickable = !!(mapping || reviewItem);
 
                   let bg = "transparent", textColor = T.textMuted, borderStyle = `1px solid ${T.border}`;
-                  if (feedbackStatus) {
+                  if (feedbackStatus === "accepted") {
                     bg = T.greenSoft; textColor = T.green; borderStyle = `1px solid ${T.green}`;
+                  } else if (feedbackStatus === "rejected") {
+                    bg = "rgba(100,100,100,0.08)"; textColor = T.textDim; borderStyle = `1px solid ${T.borderLight}`;
                   } else if (reviewItem) {
                     const sc = severityColor(reviewItem.severity);
                     if (isSelected) { bg = sc.bg; textColor = sc.text; borderStyle = `2px solid ${sc.border}`; }
@@ -311,7 +383,12 @@ function ReviewItemDrawer({ selectedReviewItem, onAccept, onReject, onUndo, feed
         </span>
         <span style={{ fontSize: 11, color: T.textDim, fontFamily: "monospace" }}>{selectedReviewItem.cell_address}</span>
         {status && (
-          <span style={{ fontSize: 11, padding: "2px 8px", borderRadius: 4, background: T.greenSoft, border: `1px solid ${T.green}`, color: T.green }}>
+          <span style={{
+            fontSize: 11, padding: "2px 8px", borderRadius: 4,
+            background: status === "accepted" ? T.greenSoft : "rgba(100,100,100,0.12)",
+            border: `1px solid ${status === "accepted" ? T.green : T.borderLight}`,
+            color: status === "accepted" ? T.green : T.textDim,
+          }}>
             {status === "accepted" ? "承諾済み" : "棄却済み"}
           </span>
         )}
@@ -428,16 +505,18 @@ function ReviewPanel({ reviewItems, summary, onAccept, onReject, onUndo, feedbac
       </div>
 
       {tab === "items" ? (
-        <ReviewItemsList
-          reviewItems={reviewItems}
-          summary={summary}
-          onAccept={onAccept}
-          onReject={onReject}
-          onUndo={onUndo}
-          feedbackMap={feedbackMap}
-          selectedReviewItem={selectedReviewItem}
-          onSelectItem={onSelectItem}
-        />
+        <>
+          <ReviewItemsList
+            reviewItems={reviewItems}
+            summary={summary}
+            onAccept={onAccept}
+            onReject={onReject}
+            onUndo={onUndo}
+            feedbackMap={feedbackMap}
+            selectedReviewItem={selectedReviewItem}
+            onSelectItem={onSelectItem}
+          />
+        </>
       ) : (
         <ChatTab
           messages={messages}
@@ -474,7 +553,8 @@ function ReviewItemsList({ reviewItems, summary, onAccept, onReject, onUndo, fee
 
           let cardBg = isSelected ? scColor.bg : "transparent";
           let cardBorder = isSelected ? `1px solid ${scColor.border}` : `1px solid ${T.border}`;
-          if (status) { cardBg = T.greenSoft; cardBorder = `1px solid ${T.green}60`; }
+          if (status === "accepted") { cardBg = T.greenSoft; cardBorder = `1px solid ${T.green}60`; }
+          else if (status === "rejected") { cardBg = "rgba(100,100,100,0.06)"; cardBorder = `1px solid ${T.borderLight}`; }
 
           return (
             <div
@@ -489,10 +569,15 @@ function ReviewItemsList({ reviewItems, summary, onAccept, onReject, onUndo, fee
                 transition: "all 0.15s",
               }}
               onMouseEnter={(e) => { if (!isSelected && !status) e.currentTarget.style.background = T.surfaceHover; }}
-              onMouseLeave={(e) => { if (!isSelected) e.currentTarget.style.background = status ? T.greenSoft : "transparent"; }}
+              onMouseLeave={(e) => { if (!isSelected) e.currentTarget.style.background = status === "accepted" ? T.greenSoft : status === "rejected" ? "rgba(100,100,100,0.06)" : "transparent"; }}
             >
               <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 6 }}>
-                <span style={{ fontSize: 10, padding: "1px 7px", borderRadius: 10, background: status ? T.greenSoft : scColor.bg, border: `1px solid ${status ? T.green : scColor.border}`, color: status ? T.green : scColor.text }}>
+                <span style={{
+                  fontSize: 10, padding: "1px 7px", borderRadius: 10,
+                  background: status === "accepted" ? T.greenSoft : status === "rejected" ? "rgba(100,100,100,0.12)" : scColor.bg,
+                  border: `1px solid ${status === "accepted" ? T.green : status === "rejected" ? T.borderLight : scColor.border}`,
+                  color: status === "accepted" ? T.green : status === "rejected" ? T.textDim : scColor.text,
+                }}>
                   {status ? (status === "accepted" ? "承諾" : "棄却") : item.severity}
                 </span>
                 <span style={{ fontSize: 11, color: T.textDim, fontFamily: "monospace" }}>{item.cell_address}</span>
@@ -606,7 +691,9 @@ export default function ReviewPage() {
   const [sessions, setSessions] = useState([]);
   const [isLoadingSessions, setIsLoadingSessions] = useState(true);
   const [selectedSession, setSelectedSession] = useState(null);
+  const [activeTab, setActiveTab] = useState("unreviewed");
   const [isReviewing, setIsReviewing] = useState(false);
+  const [isSaving, setIsSaving] = useState(false);
   const [reviewId, setReviewId] = useState(null);
   const [reviewItems, setReviewItems] = useState([]);
   const [sessionMappings, setSessionMappings] = useState([]);
@@ -617,17 +704,61 @@ export default function ReviewPage() {
   const [template, setTemplate] = useState(null);
   const [templateError, setTemplateError] = useState(null);
   const [error, setError] = useState("");
+  const [retrievalTrace, setRetrievalTrace] = useState([]);
 
-  // セッション一覧取得
-  useEffect(() => {
-    fetch(`${API_BASE}/review/sessions`)
+  // セッション一覧取得（新エンドポイント: review_status + progress 付き）
+  const fetchSessions = () => {
+    setIsLoadingSessions(true);
+    return fetch(`${API_BASE}/sessions`)
       .then((r) => r.ok ? r.json() : Promise.reject(`HTTP ${r.status}`))
-      .then((data) => { setSessions(data); setIsLoadingSessions(false); })
-      .catch((e) => { setError(String(e)); setIsLoadingSessions(false); });
-  }, []);
+      .then((data) => { setSessions(data); setIsLoadingSessions(false); return data; })
+      .catch((e) => { setError(String(e)); setIsLoadingSessions(false); return []; });
+  };
 
-  // セッション選択時に様式テンプレートを取得
-  const handleSelectSession = (session) => {
+  // 最新レビュー結果を復元する共通処理
+  const _restoreReviewResult = (sessionId, frameName, sheetName) => {
+    fetch(`${API_BASE}/review/${sessionId}/result`)
+      .then((r) => r.ok ? r.json() : null)
+      .then((result) => {
+        if (!result) return;
+        setReviewId(result.review_id);
+        setReviewItems(result.review_items || []);
+        setSessionMappings(result.mappings || []);
+        setSummary(result.summary || "");
+
+        // feedbackMap を feedbacks の decision フィールドから正確に復元する
+        const restoredMap = {};
+        for (const f of result.feedbacks || []) {
+          restoredMap[f.item_id] = f.decision === "accept" ? "accepted" : "rejected";
+        }
+        setFeedbackMap(restoredMap);
+
+        fetch(`${API_BASE}/result-layout/${sessionId}?frame_name=${frameName || "frameB"}&sheet_name=${sheetName || "MRC1"}`)
+          .then((r) => r.ok ? r.json() : null)
+          .then((layout) => { if (layout) setTemplate(layout); })
+          .catch(() => {});
+      })
+      .catch(() => {});
+  };
+
+  // 初回マウント: セッション取得 + 前回セッション復元
+  useEffect(() => {
+    fetchSessions().then((data) => {
+      const savedId = sessionStorage.getItem("nuro_last_session_id");
+      if (!savedId || data.length === 0) return;
+      const saved = data.find((s) => s.session_id === savedId);
+      if (saved) {
+        _selectSession(saved);
+        if (saved.review_status !== "not_reviewed") {
+          _restoreReviewResult(savedId, saved.frame_name, saved.sheet_name);
+        }
+        if (saved.review_status === "completed") setActiveTab("reviewed");
+      }
+    });
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // セッション選択の共通処理（内部用）
+  const _selectSession = (session) => {
     setSelectedSession(session);
     setReviewItems([]);
     setSessionMappings([]);
@@ -645,6 +776,15 @@ export default function ReviewPage() {
       .catch((e) => setTemplateError(String(e)));
   };
 
+  // セッション選択時: sessionStorageに保存、レビュー済みなら結果を自動復元
+  const handleSelectSession = (session) => {
+    sessionStorage.setItem("nuro_last_session_id", session.session_id);
+    _selectSession(session);
+    if (session.review_status !== "not_reviewed") {
+      _restoreReviewResult(session.session_id, session.frame_name, session.sheet_name);
+    }
+  };
+
   // AIレビュー実行
   const handleStartReview = async () => {
     if (!selectedSession) return;
@@ -653,6 +793,7 @@ export default function ReviewPage() {
     setReviewItems([]);
     setSummary("");
     setFeedbackMap({});
+    setRetrievalTrace([]);
 
     try {
       const res = await fetch(`${API_BASE}/review`, {
@@ -674,6 +815,7 @@ export default function ReviewPage() {
       setReviewItems(data.review_items || []);
       setSessionMappings(data.mappings || []);
       setSummary(data.summary || "");
+      setRetrievalTrace(data.retrieval_trace || []);
 
       // 転記済み様式レイアウトを取得（指摘セルの実際の値を表示するため）
       fetch(`${API_BASE}/result-layout/${selectedSession.session_id}?frame_name=${selectedSession.frame_name || "frameB"}&sheet_name=${selectedSession.sheet_name || "MRC1"}`)
@@ -702,16 +844,53 @@ export default function ReviewPage() {
 
   // 承諾/棄却
   const submitFeedback = async (itemId, decision) => {
-    setFeedbackMap((prev) => ({ ...prev, [itemId]: decision === "accept" ? "accepted" : "rejected" }));
+    const newFeedbackMap = { ...feedbackMap, [itemId]: decision === "accept" ? "accepted" : "rejected" };
+    setFeedbackMap(newFeedbackMap);
     if (!reviewId) return;
     try {
       await fetch(`${API_BASE}/review/${reviewId}/feedback`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ item_id: itemId, decision, comment: "" }),
+        body: JSON.stringify({ item_id: itemId, decision, comment: "", session_id: selectedSession?.session_id || "" }),
       });
+      // 全指摘が判定済みになったらセッション一覧を更新してステータスを反映する
+      if (reviewItems.length > 0 && reviewItems.every(item => newFeedbackMap[item.item_id])) {
+        fetchSessions();
+      }
     } catch {
       // フロント側は楽観的更新済み。エラーはログのみ
+    }
+  };
+
+  // レビュー結果を保存（未レビュー→レビュー済み移動 / 上書き保存）
+  const handleSaveReview = async () => {
+    if (!selectedSession) return;
+    setIsSaving(true);
+    setError("");
+    try {
+      // Step1: 現在の feedbackMap を Firestore に一括同期（リアルタイム保存の補完）
+      if (reviewId && Object.keys(feedbackMap).length > 0) {
+        const feedbacksToSync = Object.entries(feedbackMap).map(([itemId, status]) => ({
+          item_id: itemId,
+          decision: status === "accepted" ? "accept" : "reject",
+        }));
+        const syncRes = await fetch(`${API_BASE}/review/${reviewId}/feedbacks/sync`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ feedbacks: feedbacksToSync, session_id: selectedSession?.session_id || "" }),
+        });
+        if (!syncRes.ok) throw new Error("フィードバックの保存に失敗しました");
+      }
+      // Step2: セッションを完了済みにマーク
+      await fetch(`${API_BASE}/sessions/${selectedSession.session_id}/complete`, {
+        method: "PATCH",
+      });
+      await fetchSessions();
+      setActiveTab("reviewed");
+    } catch (e) {
+      setError(e.message || String(e));
+    } finally {
+      setIsSaving(false);
     }
   };
 
@@ -724,9 +903,11 @@ export default function ReviewPage() {
     });
     if (!reviewId) return;
     try {
-      await fetch(`${API_BASE}/review/${reviewId}/feedback/${itemId}`, {
+      await fetch(`${API_BASE}/review/${reviewId}/feedback/${itemId}?session_id=${selectedSession?.session_id || ""}`, {
         method: "DELETE",
       });
+      // completed → in_progress に戻る可能性があるためセッション一覧を更新する
+      fetchSessions();
     } catch {
       // 楽観的更新済み。エラーはログのみ
     }
@@ -760,7 +941,12 @@ export default function ReviewPage() {
           isLoadingSessions={isLoadingSessions}
           onSelect={handleSelectSession}
           onStartReview={handleStartReview}
+          onSaveReview={handleSaveReview}
           isReviewing={isReviewing}
+          isSaving={isSaving}
+          hasReviewItems={reviewItems.length > 0}
+          activeTab={activeTab}
+          onTabChange={setActiveTab}
         />
 
         {/* 中: 様式プレビュー + 下部ドロワー */}

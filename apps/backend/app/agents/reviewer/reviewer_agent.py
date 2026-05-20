@@ -45,7 +45,10 @@ import re
 import uuid
 from datetime import datetime, timezone
 
+from langfuse import observe
+
 from apps.backend.app.agents.reviewer import knowledge_loader
+from apps.backend.app.agents.reviewer.criteria_loader import build_system_instruction
 from apps.backend.app.api.models import ReviewItem
 from apps.backend.app.core.ai_client import call_gemini
 from apps.backend.app.core.frame_config_loader import load_frame_config
@@ -175,6 +178,7 @@ def _to_number(value: str) -> float | None:
         return None
 
 
+@observe(name="review", capture_input=True, capture_output=True)
 async def run_review(
     session_id: str,
     utility_name: str,
@@ -183,84 +187,125 @@ async def run_review(
     sheet_name: str = "MRC1",
     reactor_type: str | None = None,
     fee_type: str | None = None,
-) -> list[ReviewItem]:
+) -> tuple[list[ReviewItem], list[dict]]:
     """
-    4つの観点（Tool）でナレッジ収集し、Gemini にレビューを依頼して指摘リストを返す。
+    5つのToolでナレッジ収集し、Geminiにレビューを依頼して指摘リストとtrace情報を返す。
 
-    PoC：caller_role="NuRO" で固定して knowledge_loader を呼び出す
-    本番移行時：引数に caller_role: str を追加して knowledge_loader に渡すだけでよい
-                このファイル内の他の処理は変更不要
-
-    Args:
-        session_id:   FirestoreのセッションID（ログ・追跡用）
-        utility_name: 電力会社名
-        mappings:     転記結果（field_name, cell_address, value, reasoning のリスト）
-        frame_name:   様式名
-        sheet_name:   シート名
-        reactor_type: 炉型（ナレッジフィルタ用）
-        fee_type:     費目（ナレッジフィルタ用）
+    PoC：caller_role="NuRO" 固定
+    本番移行時：引数に caller_role を追加して knowledge_loader に渡すだけでよい
 
     Returns:
-        ReviewItem のリスト
+        (ReviewItem のリスト, retrieval_trace のリスト)
+        retrieval_trace: 各Toolの検索クエリ・取得件数・代表ドキュメントIDを含む
     """
-    # mappings からメタ情報を補完
     if not reactor_type:
         reactor_type = _extract_field(mappings, "炉型")
     if not fee_type:
         fee_type = _extract_field(mappings, "対象費目1")
 
-    # ── Tool 1: 自社の過去指摘事例 ────────────────────────────────────
-    own_history = knowledge_loader.load_f3(
-        caller_role="NuRO",
-        utility_name=utility_name,
-        reactor_type=reactor_type,
-        fee_type=fee_type,
-        limit=30,
-    )
+    retrieval_trace: list[dict] = []
 
-    # ── Tool 2: 他社の類似事例（NuROは全社参照可） ───────────────────
-    similar_cases = knowledge_loader.load_f3(
-        caller_role="NuRO",
-        utility_name=None,  # 全社
-        reactor_type=reactor_type,
-        fee_type=fee_type,
-        limit=30,
-    )
-
-    # ── Tool 3: 計画・実績差分（実績提出時のみ、計画時は空リスト） ───
-    plan_diffs = detect_plan_diff(mappings, frame_name=frame_name, sheet_name=sheet_name)
-
-    # ── Tool 4: F2ナレッジ（NuRO内有）────────────────────────────────
+    # ── Tool 1: F2ナレッジ（NuRO内有の知見）────────────────────────────
     f2_knowledge = knowledge_loader.load_f2(
-        caller_role="NuRO",
-        fee_type=fee_type,
-        limit=20,
+        caller_role="NuRO", fee_type=fee_type, limit=20,
     )
+    retrieval_trace.append({
+        "tool": "Tool1（F2ナレッジ）",
+        "query": fee_type or "（クエリなし）",
+        "count": len(f2_knowledge),
+        "top_ids": [r.get("_doc_id", "") for r in f2_knowledge[:3]],
+    })
 
-    # ── Tool 5: 補足資料（テキスト部分のみ、写真はPhase3対応） ────────
-    # data/knowledge/supplement/ が存在しない場合は空リストが返る（エラーなし）
-    # Phase 3：Gemini 2.0 Flash のマルチモーダルで has_images=True の資料も処理
+    # ── Tool 2a: F3ナレッジ（自社）──────────────────────────────────────
+    f3_own = knowledge_loader.load_f3(
+        caller_role="NuRO", utility_name=utility_name,
+        reactor_type=reactor_type, fee_type=fee_type, limit=20,
+    )
+    retrieval_trace.append({
+        "tool": f"Tool2a（F3自社: {utility_name}）",
+        "query": fee_type or "（クエリなし）",
+        "count": len(f3_own),
+        "top_ids": [r.get("_doc_id", "") for r in f3_own[:3]],
+    })
+
+    # ── Tool 2b: F3ナレッジ（他社）──────────────────────────────────────
+    f3_all = knowledge_loader.load_f3(
+        caller_role="NuRO", utility_name=None,
+        reactor_type=reactor_type, fee_type=fee_type, limit=20,
+    )
+    retrieval_trace.append({
+        "tool": "Tool2b（F3他社）",
+        "query": fee_type or "（クエリなし）",
+        "count": len(f3_all),
+        "top_ids": [r.get("_doc_id", "") for r in f3_all[:3]],
+    })
+
+    # ── Tool 3: 類似工事データ（スタブ）────────────────────────────────
+    similar_work = knowledge_loader.load_similar_work(
+        caller_role="NuRO", reactor_type=reactor_type, fee_type=fee_type, limit=20,
+    )
+    retrieval_trace.append({
+        "tool": "Tool3（類似工事データ）",
+        "query": fee_type or "（クエリなし）",
+        "count": len(similar_work),
+        "top_ids": [],
+        "note": "Phase2現在データ未入手",
+    })
+
+    # ── Tool 4: 補足資料（テキストのみ）────────────────────────────────
     supplement_info = knowledge_loader.load_supplement(
-        caller_role="NuRO",
-        utility_name=utility_name,
-        fee_type=fee_type,
-        limit=20,
+        caller_role="NuRO", utility_name=utility_name, fee_type=fee_type, limit=20,
     )
+    retrieval_trace.append({
+        "tool": "Tool4（補足資料）",
+        "query": fee_type or "（クエリなし）",
+        "count": len(supplement_info),
+        "top_ids": [r.get("source_file", "") for r in supplement_info[:3]],
+    })
 
-    # ── Gemini でレビュー生成 ──────────────────────────────────────────
+    # ── Tool 5: 計画・実績差分（ルールベース）──────────────────────────
+    plan_diffs = detect_plan_diff(mappings, frame_name=frame_name, sheet_name=sheet_name)
+    retrieval_trace.append({
+        "tool": "Tool5（計画・実績差分）",
+        "query": "G列/K列数値比較",
+        "count": len(plan_diffs),
+        "top_ids": [d.get("cell_address", "") for d in plan_diffs[:3]],
+    })
+
+    # ── ルールベース検出（Geminiに依存しない・必ず検出） ──────────────
+    empty_cells, placeholder_cells = _compute_cell_sets(mappings)
+    rule_items = _generate_rule_based_items(mappings, placeholder_cells)
+    rule_cells = {item.cell_address for item in rule_items}
+
+    # ── Gemini でレビュー生成 ─────────────────────────────────────────
     prompt = _build_prompt(
         mappings=mappings,
-        own_history=own_history,
-        similar_cases=similar_cases,
-        plan_diffs=plan_diffs,
         f2_knowledge=f2_knowledge,
+        f3_own=f3_own,
+        f3_all=f3_all,
+        similar_work=similar_work,
         supplement_info=supplement_info,
+        plan_diffs=plan_diffs,
         utility_name=utility_name,
         sheet_name=sheet_name,
+        empty_cells=empty_cells,
+        placeholder_cells=placeholder_cells,
     )
 
-    raw_response = call_gemini(prompt)
-    return _parse_review_response(raw_response)
+    # Gemini でレビュー生成（@observe デコレーターが自動的にトレース）
+    system_instruction = build_system_instruction(frame_name, sheet_name)
+    raw_response = call_gemini(prompt, system_instruction=system_instruction)
+    gemini_items = _parse_review_response(raw_response)
+
+    # ── ルールベースとGeminiをマージ ──────────────────────────────────
+    # ルールベースが検出済みのセルはGeminiの指摘を除外（重複防止）
+    # ルールベースを先頭に置き、Geminiの残りを後ろに追加してから連番付与
+    filtered_gemini = [i for i in gemini_items if i.cell_address not in rule_cells]
+    all_items = rule_items + filtered_gemini
+    for idx, item in enumerate(all_items, 1):
+        item.item_id = f"review_{idx:03d}"
+
+    return all_items, retrieval_trace
 
 
 def _extract_field(mappings: list[dict], field_name: str) -> str | None:
@@ -272,22 +317,144 @@ def _extract_field(mappings: list[dict], field_name: str) -> str | None:
     return None
 
 
+def _number_records(records: list[dict], prefix: str) -> tuple[str, list[dict]]:
+    """
+    ナレッジレコードに [prefix#N] の番号を付与してプロンプト用テキストと
+    番号付きレコードリストを返す。Gemini が evidence に番号を引用できるようにする。
+    """
+    if not records:
+        return "（なし）", []
+    numbered = []
+    for i, r in enumerate(records, 1):
+        r2 = dict(r)
+        r2["_ref"] = f"[{prefix}#{i}]"
+        numbered.append(r2)
+    return json.dumps(numbered, ensure_ascii=False, indent=2), numbered
+
+
+# 提出書類として不適切なプレースホルダー値のパターン
+# 「〇〇」「○○」など記入漏れを示す仮置き文字、または実質空白と同等の値
+_PLACEHOLDER_RE = re.compile(
+    r"^[〇○◯●□■△▲▽▼※〜～ー\-ー\s]+$"      # 記号のみで構成（単一記号も含む）
+    r"|^（?未定）?$|^（?未記入）?$|^（?記入）?$"  # 未定・未記入系
+    r"|^TBD$|^TBA$",
+    re.IGNORECASE,
+)
+
+# 「〇〇」のように同一記号が2文字以上連続するパターン（全体一致・最も典型的なプレースホルダー）
+_REPEATED_SYMBOL_RE = re.compile(r"^([〇○◯●□■△▲※])\1+\s*$")
+
+# テキスト内に「〇〇」「○○」が埋め込まれているパターン（部分一致）
+# 例: 「〇〇のため廃棄物処理を…」「〇〇工事と装置を共用…」
+_EMBEDDED_PLACEHOLDER_RE = re.compile(r"[〇○◯]{2,}|[●□■△▲]{2,}")
+
+
+def _is_placeholder_value(value: str) -> bool:
+    """セル値全体がプレースホルダーかどうかを判定する（完全一致）"""
+    v = value.strip()
+    if not v:
+        return False
+    return bool(_REPEATED_SYMBOL_RE.match(v) or _PLACEHOLDER_RE.match(v))
+
+
+def _has_embedded_placeholder(value: str) -> bool:
+    """テキスト内に〇〇等のプレースホルダーが埋め込まれているかを判定する（部分一致）"""
+    return bool(_EMBEDDED_PLACEHOLDER_RE.search(value.strip()))
+
+
+def _compute_cell_sets(mappings: list[dict]) -> tuple[set[str], dict[str, str]]:
+    """
+    mappings から「空値セル」と「プレースホルダーセル」を抽出する。
+
+    Returns:
+        empty_cells:       値が空・無内容のセル番地セット
+        placeholder_cells: {セル番地: 値} — 〇〇等のプレースホルダー（全体・埋め込みの両方）
+    """
+    empty_cells: set[str] = set()
+    placeholder_cells: dict[str, str] = {}
+
+    for m in mappings:
+        addr = m.get("cell_address", "")
+        if not addr:
+            continue
+        val = str(m.get("value", "")).strip()
+
+        if not val or val in ("なし", "該当なし", "N/A", "-", "—"):
+            empty_cells.add(addr)
+        elif _is_placeholder_value(val) or _has_embedded_placeholder(val):
+            placeholder_cells[addr] = val
+
+    return empty_cells, placeholder_cells
+
+
+def _generate_rule_based_items(
+    mappings: list[dict],
+    placeholder_cells: dict[str, str],
+) -> list[ReviewItem]:
+    """
+    ルールベースで必ず検出すべき指摘を生成する（Geminiに依存しない）。
+
+    現在のルール：
+    - プレースホルダー値（〇〇・テキスト内埋め込みを含む）が含まれるセル → 必ず指摘
+    """
+    cell_to_field = {m.get("cell_address", ""): m.get("field_name", "") for m in mappings}
+    items = []
+
+    for addr, val in placeholder_cells.items():
+        field_name = cell_to_field.get(addr, addr)
+        # 表示は30文字に切り詰める
+        short_val = val if len(val) <= 30 else val[:30] + "…"
+        items.append(ReviewItem(
+            item_id="",  # run_review() で連番付与
+            field_name=field_name,
+            cell_address=addr,
+            severity="要確認",
+            comment=f"「{short_val}」にプレースホルダーが残っています。正式な内容に修正してください。",
+            evidence="AI判断（ナレッジ参照なし）：〇〇等の仮置き文字は正式提出書類として不適切",
+            knowledge_source="AI知見",
+        ))
+
+    return items
+
+
 def _build_prompt(
     mappings: list[dict],
-    own_history: list[dict],
-    similar_cases: list[dict],
-    plan_diffs: list[dict],
     f2_knowledge: list[dict],
+    f3_own: list[dict],
+    f3_all: list[dict],
+    similar_work: list[dict],
     supplement_info: list[dict],
+    plan_diffs: list[dict],
     utility_name: str,
     sheet_name: str,
+    empty_cells: set[str] | None = None,
+    placeholder_cells: dict[str, str] | None = None,
 ) -> str:
-    mappings_text = json.dumps(mappings, ensure_ascii=False, indent=2)
-    own_history_text = json.dumps(own_history, ensure_ascii=False, indent=2) if own_history else "（なし）"
-    similar_text = json.dumps(similar_cases, ensure_ascii=False, indent=2) if similar_cases else "（なし）"
-    plan_diff_text = json.dumps(plan_diffs, ensure_ascii=False, indent=2) if plan_diffs else "（なし、または計画提出のため差分チェック不要）"
-    f2_text = json.dumps(f2_knowledge, ensure_ascii=False, indent=2) if f2_knowledge else "（なし）"
-    supplement_text = json.dumps(supplement_info, ensure_ascii=False, indent=2) if supplement_info else "（なし）"
+    # 転記済みフィールドのセル番地セットを構築（範囲外レビュー防止）
+    valid_cells = {m.get("cell_address", "") for m in mappings if m.get("cell_address")}
+
+    # 呼び出し元で事前計算済みの場合はそれを使う（再計算コストを省く）
+    if empty_cells is None or placeholder_cells is None:
+        empty_cells, placeholder_cells = _compute_cell_sets(mappings)
+
+    # ナレッジに番号を付与
+    f2_text,  _ = _number_records(f2_knowledge,  "F2")
+    f3o_text, _ = _number_records(f3_own,        "F3own")
+    f3a_text, _ = _number_records(f3_all,        "F3all")
+    sim_text, _ = _number_records(similar_work,  "SIM")
+    sup_text, _ = _number_records(supplement_info, "SUP")
+
+    mappings_text  = json.dumps(mappings,   ensure_ascii=False, indent=2)
+    plan_diff_text = (
+        json.dumps(plan_diffs, ensure_ascii=False, indent=2)
+        if plan_diffs else "（なし。計画提出または差分なし）"
+    )
+    valid_cells_text       = ", ".join(sorted(valid_cells))  or "（なし）"
+    empty_cells_text       = ", ".join(sorted(empty_cells))  or "（なし）"
+    placeholder_cells_text = (
+        json.dumps(placeholder_cells, ensure_ascii=False, indent=2)
+        if placeholder_cells else "（なし）"
+    )
 
     return f"""あなたはNuRO（廃炉管理機構）の審査担当AIです。
 電力会社（{utility_name}）が提出した{sheet_name}様式の転記結果をレビューしてください。
@@ -295,75 +462,119 @@ def _build_prompt(
 ## レビュー対象の転記結果
 {mappings_text}
 
+### レビュー対象セル番地一覧（この範囲のみ指摘可能）
+{valid_cells_text}
+
+### 値が空・未記載のセル番地
+{empty_cells_text}
+
+### プレースホルダー値が含まれるセル（セル番地: 値）
+{placeholder_cells_text}
+
+---
+
 ## 参照ナレッジ
 
-### Tool1: {utility_name} の過去指摘事例
-{own_history_text}
-
-### Tool2: 他社の類似事例
-{similar_text}
-
-### Tool3: 計画・実績の差分（実績提出時のみ）
-{plan_diff_text}
-
-### Tool4: NuROナレッジ（F2）
+### Tool1: NuROナレッジ（F2）— 各レコードに [F2#N] の参照番号付き
 {f2_text}
 
-### Tool5: 補足資料（工事概要・テキスト情報）
-{supplement_text}
+### Tool2a: F3ナレッジ（{utility_name} 自社事例）— 各レコードに [F3own#N] の参照番号付き
+{f3o_text}
+
+### Tool2b: F3ナレッジ（他社類似事例）— 各レコードに [F3all#N] の参照番号付き
+{f3a_text}
+
+### Tool3: 類似工事データ — 各レコードに [SIM#N] の参照番号付き
+{sim_text}
+
+### Tool4: 補足資料 — 各レコードに [SUP#N] の参照番号付き
+{sup_text}
+
+### Tool5: 計画・実績の差分（ルールベース検出済み）
+{plan_diff_text}
+
+---
 
 ## 指示
 
 上記のナレッジと転記結果を照合し、以下の観点で指摘事項をリストアップしてください。
 
-1. 過去に同様の指摘があった箇所（Tool1・Tool2参照）
-2. 計画値と実績値の乖離が大きい箇所（Tool3参照）
-3. 必須記載が不十分な箇所（Tool4・ナレッジ参照）
-4. 補足資料の内容と転記結果に不整合がある箇所（Tool5参照）
+1. NuROナレッジ（Tool1）・過去指摘事例（Tool2a/2b）に照らして問題のある箇所
+2. 計画値と実績値の乖離（Tool5 の plan_diffs のみを根拠にすること）
+3. 補足資料との不整合（Tool4参照）
+4. 類似工事との比較で懸念がある箇所（Tool3参照）
+5. 提出書類として不適切な記載（プレースホルダー・空欄）
 
-## AI知見で指摘する場合の制約（必ず守ること）
+---
 
-ナレッジが（なし）の場合でも、以下の観点で指摘を行ってください。
-ただし、下記のルールを厳守してください。
+## フィールドのレビュールール（必ず守ること）
+
+### プレースホルダー値の扱い（必ず指摘すること）
+- 「プレースホルダー値が含まれるセル」に列挙されたセルは**必ず**指摘する。
+- 「〇〇」「○○」等の仮置き文字は、電力会社から正式提出される書類として不適切。
+- comment には「〇〇等のプレースホルダーが残っており、正式な記載が必要です」と明記する。
+- knowledge_source は "AI知見"、severity は "要確認" とする。
+
+### 空値フィールドの扱い
+- 「値が空・未記載のセル番地」のセルは、そのフィールドが必要な場合のみ指摘する。
+- 「計画実績区分」が「実績」の場合、計画値・実績値の両方の記載が必要。
+  いずれかが空欄なら「実績報告であるため計画値・実績値の記載が必要」と指摘する。
+- 空欄指摘には「なぜそのフィールドが必要か」の文脈的根拠を必ず記載する。
+
+### 範囲外セルへの指摘禁止
+- 「レビュー対象セル番地一覧」に含まれないセル番地は cell_address に使用しない。
+- 転記結果に存在しないフィールド名は field_name に使用しない。
+
+### 計画・実績の差分
+- 数値の差分指摘は Tool5（plan_diffs）に差分が検出された場合のみ生成する。
+- plan_diffs が「なし」の場合、数値の乖離について独自に指摘しない。
+- G列/K列を独自に比較・推定して差分指摘することは禁止。
+
+### 重複指摘の禁止
+- 同一の cell_address に対して複数の指摘を生成しない（1セル1指摘まで）。
+
+---
+
+## AIのみで指摘する場合の制約（ハルシネーション防止）
 
 ### 指摘できる観点（ナレッジなしの場合）
+- 提出書類として不適切な記載：プレースホルダー（〇〇等）、意味のない仮置き値
+- 記載の具体性が不十分：「〜に努める」「適切に実施する」等の曖昧な表現のみ
+- 論理的な不整合：計画・実績の記載が矛盾している
+- 具体的な数値・根拠の欠如（例：費用低減策の金額根拠がない）
 
-- 記載の具体性が不十分：「〜に努める」「適切に実施する」等の曖昧な表現のみで、具体的な施策・手順・数値が記載されていない
-- 論理的な不整合：計画時の記載と実績時の記載が矛盾している、または説明が繋がっていない
-- 空欄・未記載：通常記載が期待される項目が空欄になっている
-
-### 絶対に行ってはいけないこと（ハルシネーション防止）
-
-- 具体的な法令条文・通達番号・数値基準（「〇〇条」「〇〇%以内」等）を根拠にした指摘
-- 確認できない情報を「規制で定められている」「法令上必要」と表現すること
-- 参照ナレッジに記載されていない事実を「過去に指摘された」と表現すること
+### 絶対に行ってはいけないこと
+- 法令条文・通達番号・数値基準（「〇〇条」「〇〇%以内」等）を根拠にした指摘
+- 「規制で定められている」「法令上必要」という表現
+- ナレッジに記載のない事実を「過去に指摘された」と表現すること
 - ナレッジ（なし）なのに knowledge_source を "F2" や "F3" と記載すること
 
-### ナレッジ参照なしで指摘する場合の出力ルール
+### ナレッジ参照なしの場合の出力ルール
+- severity: 必ず "要確認"
+- evidence: 必ず "AI判断（ナレッジ参照なし）：" で始め、判断根拠を簡潔に記述
+- knowledge_source: "AI知見"
 
-- severity: 必ず **"要確認"**（断定を避ける）
-- evidence: 必ず **"AI判断（ナレッジ参照なし）："** で始め、判断の根拠を簡潔に述べる
-- knowledge_source: **"AI知見"** とする
+---
 
-## 出力形式（必ずこのJSONのみを返してください。前後に説明文を入れないでください）
+## 出力形式（このJSONのみを返してください。前後に説明文を入れないでください）
 
 {{
   "review_items": [
     {{
-      "field_name": "フィールド名",
-      "cell_address": "セル番地（例: K22）",
+      "field_name": "フィールド名（転記結果のfield_nameと一致させること）",
+      "cell_address": "セル番地（レビュー対象セル番地一覧から選択）",
       "severity": "要確認 または AIからの指摘",
-      "comment": "指摘内容（自然言語で具体的に）",
-      "evidence": "根拠（ナレッジ引用 または 'AI判断（ナレッジ参照なし）: 〇〇のため'）",
-      "knowledge_source": "F2 または F3 または 計画差分 または AI知見"
+      "comment": "指摘内容（具体的に。曖昧表現を使うなら転記値を引用すること）",
+      "evidence": "根拠（ナレッジを参照した場合は [F2#1] 等の番号を明記。参照なしの場合は 'AI判断（ナレッジ参照なし）：〇〇のため'）",
+      "knowledge_source": "F2 / F3 / 類似工事 / 補足資料 / 計画差分 / AI知見"
     }}
   ],
   "summary": "全体的なレビュー所見（2〜3文）"
 }}
 
 severity の使い分け：
-  "要確認"     → NuROの判断が必要な指摘、またはナレッジ参照なしの指摘
-  "AIからの指摘" → ナレッジに明確な根拠がある場合のみ使用可能
+  "要確認"      → NuROの判断が必要、またはナレッジ参照なしの指摘
+  "AIからの指摘" → ナレッジに明確な根拠がある場合のみ
 
 指摘がない場合は review_items を空リストにしてください。
 """

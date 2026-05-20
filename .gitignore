@@ -16,6 +16,14 @@ htmlcov/
 .env.*
 !.env.example
 
+# 画像ディレクトリ
+images/
+
+# GCPサービスアカウントキー（絶対にコミットしないこと）
+*-key.json
+*-credentials.json
+adk-tutorial-492303-244b5dc2da76.json
+
 # IDE / OS
 .vscode/
 .idea/

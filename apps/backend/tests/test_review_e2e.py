@@ -153,26 +153,25 @@ class TestKnowledgeLoader:
         assert result == []
 
     def test_schema_discovery(self):
-        """スキーマファイルが正しく検出される"""
-        from apps.backend.app.agents.reviewer.knowledge_loader import _discover_schemas
+        """スキーマファイルが正しく検出される（Phase2: _excel_reader に移動）"""
+        from apps.backend.app.agents.reviewer._excel_reader import _discover_schemas
         f3 = _discover_schemas("f3")
         f2 = _discover_schemas("f2")
         assert len(f3) == 4, f"F3スキーマは4件のはず: {[s['sheet_name'] for s in f3]}"
         assert len(f2) == 2, f"F2スキーマは2件のはず: {[s['sheet_name'] for s in f2]}"
 
     def test_f3_schema_sheet_names(self):
-        """F3スキーマのsheet_nameが正しい"""
-        from apps.backend.app.agents.reviewer.knowledge_loader import _discover_schemas
+        """F3スキーマのsheet_nameが正しい（Phase2: _excel_reader に移動）"""
+        from apps.backend.app.agents.reviewer._excel_reader import _discover_schemas
         sheets = {s["sheet_name"] for s in _discover_schemas("f3")}
         assert sheets == {"KNI_1G_01", "KNI_1G_02", "KNI_1G_03", "KNI_2G"}
 
     def test_excel_reader_with_mock_data(self):
-        """モックDataFrameでknowledge_loaderの読み込み処理を検証する"""
+        """モックDataFrameでExcel読み込み処理を検証する（Phase2: _excel_reader に移動）"""
         import pandas as pd
-        from apps.backend.app.agents.reviewer.knowledge_loader import _read_excel_by_schema
+        from apps.backend.app.agents.reviewer._excel_reader import _read_excel_by_schema
 
         schema = {
-            # data_start_row=1 でヘッダーなし・1行目からデータ
             "layout": {"data_start_row": 1},
             "loader_config": {"id_column": "A"},
             "fixed_columns": [
@@ -190,17 +189,16 @@ class TestKnowledgeLoader:
             "meta_cells": {},
         }
 
-        # pandas が header=None で返す形式に合わせて列を整数インデックスで作成
         raw_df = pd.DataFrame([
             ["03_1G_01_0001", "維持管理費", "確認します", "問題ありません"],
-        ])  # columns = 0, 1, 2, 3
+        ])
 
-        with patch("apps.backend.app.agents.reviewer.knowledge_loader.pd.read_excel", return_value=raw_df):
+        with patch("apps.backend.app.agents.reviewer._excel_reader.pd.read_excel", return_value=raw_df):
             from pathlib import Path
             records, utility = _read_excel_by_schema(schema, Path("dummy.xlsx"))
 
         assert utility == ""
-        assert len(records) == 2  # NuROコメント + 電力回答の2メッセージ
+        assert len(records) == 2
         assert records[0]["id"] == "03_1G_01_0001"
         assert records[0]["message_direction"] == "nuro"
         assert records[1]["message_direction"] == "denryoku"
@@ -253,7 +251,9 @@ def _make_mock_firestore(mappings: list[dict] = MOCK_MAPPINGS, reviewed: bool = 
 
 _REVIEW_FS_PATH   = "apps.backend.app.api.routes.review.get_firestore_client"
 _UPLOAD_FS_PATH   = "apps.backend.app.api.routes.upload.get_firestore_client"
-_GEMINI_PATH      = "apps.backend.app.core.ai_client.call_gemini"
+# reviewer_agent は call_gemini をモジュールロード時にインポートするため
+# モック先はそちらのモジュール内の名前を指定する（標準的な Python mock のプラクティス）
+_GEMINI_PATH      = "apps.backend.app.agents.reviewer.reviewer_agent.call_gemini"
 
 
 @pytest.fixture
@@ -358,9 +358,12 @@ class TestFeedbackEndpoint:
         assert res.json()["status"] == "saved"
         review_doc.reference.update.assert_called_once()
 
-    def test_reject_returns_discarded_without_write(self):
-        """棄却（reject）は "discarded" を返し Firestore に書き込まない"""
+    def test_reject_returns_discarded_and_increments_decided_count(self):
+        """棄却（reject）は "discarded" を返し decided_count をインクリメントする"""
+        review_doc = MagicMock()
+        review_doc.reference.update = MagicMock()
         db = MagicMock()
+        db.collection_group.return_value.where.return_value.limit.return_value.stream.return_value = iter([review_doc])
         with patch(_REVIEW_FS_PATH, return_value=db):
             from apps.backend.app.api.main import app
             c = TestClient(app)
@@ -371,8 +374,8 @@ class TestFeedbackEndpoint:
             })
         assert res.status_code == 200
         assert res.json()["status"] == "discarded"
-        # 棄却は Firestore に書き込まない
-        db.collection_group.assert_not_called()
+        # 棄却は decided_count のみインクリメント（指摘内容は保存しない）
+        review_doc.reference.update.assert_called_once()
 
     def test_invalid_decision_returns_400(self):
         """無効な decision 値は 400 を返す"""

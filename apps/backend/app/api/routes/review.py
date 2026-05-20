@@ -20,13 +20,14 @@ Phase 2 移行判断トリガー（stats エンドポイントで確認）：
 import uuid
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Query
 from google.cloud import firestore
 
 from apps.backend.app.agents.reviewer import reviewer_agent
 from apps.backend.app.api.models import (
     FeedbackRequest,
     FeedbackResponse,
+    FeedbackSyncRequest,
     ReviewRequest,
     ReviewResponse,
     SessionSummary,
@@ -34,6 +35,29 @@ from apps.backend.app.api.models import (
 from apps.backend.app.core.firestore_client import get_firestore_client
 
 router = APIRouter()
+
+
+def _get_review_result_doc(db, review_id: str, session_id: str = ""):
+    """review_results ドキュメントを取得する。
+    session_id があれば直接パスで取得（Firestoreインデックス不要）。
+    """
+    if session_id:
+        ref = (
+            db.collection("sessions")
+            .document(session_id)
+            .collection("review_results")
+            .document(review_id)
+        )
+        doc = ref.get()
+        return doc if doc.exists else None
+    # fallback: collection_group（インデックスが必要なため非推奨）
+    docs = (
+        db.collection_group("review_results")
+        .where(filter=firestore.FieldFilter("review_id", "==", review_id))
+        .limit(1)
+        .stream()
+    )
+    return next(docs, None)
 
 
 @router.post("/review", response_model=ReviewResponse)
@@ -58,9 +82,9 @@ async def run_review(request: ReviewRequest):
     if not mappings:
         raise HTTPException(status_code=400, detail="セッションに転記データがありません")
 
-    # AIレビュー実行（Agentic RAG 軽量版: 4 Tool 固定順実行）
+    # AIレビュー実行（Agentic RAG: 5 Tool 固定順実行）
     try:
-        review_items = await reviewer_agent.run_review(
+        review_items, retrieval_trace = await reviewer_agent.run_review(
             session_id=request.session_id,
             utility_name=request.utility_name,
             mappings=mappings,
@@ -72,26 +96,30 @@ async def run_review(request: ReviewRequest):
 
     review_id = str(uuid.uuid4())
     reviewed_at = datetime.now(timezone.utc).isoformat()
+    summary = _extract_summary_from_items(review_items)
 
     # レビュー結果をFirestoreのサブコレクションに保存
+    # retrieval_trace はデバッグ用途のため Firestore には保存しない
     review_ref = session_ref.collection("review_results").document(review_id)
     review_ref.set({
         "review_id": review_id,
         "review_items": [item.model_dump() for item in review_items],
-        "summary": _extract_summary_from_items(review_items),
+        "summary": summary,
         "reviewed_at": reviewed_at,
         "feedbacks": [],
+        "total_count": len(review_items),
+        "decided_count": 0,
     })
 
-    # セッションのレビュー済みフラグを更新
     session_ref.update({"reviewed": True})
 
     return ReviewResponse(
         review_id=review_id,
         review_items=review_items,
-        summary=_extract_summary_from_items(review_items),
+        summary=summary,
         reviewed_at=reviewed_at,
         mappings=mappings,
+        retrieval_trace=retrieval_trace,
     )
 
 
@@ -100,60 +128,52 @@ async def submit_feedback(review_id: str, request: FeedbackRequest):
     """
     NuROが指摘事項に対して承諾（accept）または棄却（reject）を行う。
 
-    承諾 → Firestoreにfeedbackを保存
-    棄却 → セッション内のみで破棄（DBには保存しない）
+    承諾/棄却どちらも feedbacks 配列に保存することで、履歴復元時に正確に再現できる。
     """
     if request.decision not in ("accept", "reject"):
         raise HTTPException(status_code=400, detail="decision は 'accept' または 'reject' を指定してください")
 
-    if request.decision == "reject":
-        # 棄却もPhase 2移行判断のために集計する（内容はDBに残さない）
-        _increment_feedback_stats(db=get_firestore_client(), decision="reject")
-        return FeedbackResponse(status="discarded")
-
-    # 承諾の場合: 対応するreview_resultを検索してfeedbackを追記
     db = get_firestore_client()
-
-    # review_id からセッションを逆引き（Firestoreのコレクショングループクエリを使用）
-    review_docs = (
-        db.collection_group("review_results")
-        .where(filter=firestore.FieldFilter("review_id", "==", review_id))
-        .limit(1)
-        .stream()
-    )
-    review_doc = next(review_docs, None)
+    review_doc = _get_review_result_doc(db, review_id, request.session_id)
     if review_doc is None:
         raise HTTPException(status_code=404, detail=f"レビュー結果が見つかりません: {review_id}")
 
+    ts_key = "accepted_at" if request.decision == "accept" else "rejected_at"
     feedback_entry = {
         "item_id": request.item_id,
-        "decision": "accept",
+        "decision": request.decision,
         "comment": request.comment,
-        "accepted_at": datetime.now(timezone.utc).isoformat(),
+        ts_key: datetime.now(timezone.utc).isoformat(),
     }
     review_doc.reference.update({
-        "feedbacks": firestore.ArrayUnion([feedback_entry])
+        "feedbacks": firestore.ArrayUnion([feedback_entry]),
+        "decided_count": firestore.Increment(1),
     })
 
-    # 承諾もPhase 2移行判断のために集計する
-    _increment_feedback_stats(db=get_firestore_client(), decision="accept")
+    _increment_feedback_stats(db=db, decision=request.decision)
+    _record_langfuse_feedback(review_id=review_id, item_id=request.item_id, decision=request.decision)
 
     return FeedbackResponse(status="saved")
 
 
 @router.get("/review/sessions", response_model=list[SessionSummary])
-async def list_unreviewed_sessions():
+async def list_sessions(include_history: bool = Query(False)):
     """
-    未レビューのセッション一覧を返す（NuROの画面での選択用）。
+    セッション一覧を返す（NuROの画面での選択用）。
+
+    include_history=false（デフォルト）: 未レビューのセッションのみ
+    include_history=true: レビュー済みを含む全セッション（履歴モード）
 
     PoC：全セッションを返す（認証なし）
     本番移行時：JWT から utility_name を取得してフィルタリングを追加する
     """
     db = get_firestore_client()
 
+    query = db.collection("sessions")
+    if not include_history:
+        query = query.where(filter=firestore.FieldFilter("reviewed", "==", False))
     docs = (
-        db.collection("sessions")
-        .where(filter=firestore.FieldFilter("reviewed", "==", False))
+        query
         .order_by("created_at", direction=firestore.Query.DESCENDING)
         .limit(50)
         .stream()
@@ -163,7 +183,6 @@ async def list_unreviewed_sessions():
     for doc in docs:
         data = doc.to_dict()
         created_at = data.get("created_at")
-        # Firestore の SERVER_TIMESTAMP は datetime 型で返る
         if hasattr(created_at, "isoformat"):
             created_at_str = created_at.isoformat()
         else:
@@ -173,6 +192,7 @@ async def list_unreviewed_sessions():
             SessionSummary(
                 session_id=data.get("session_id", doc.id),
                 utility_name=data.get("utility_name", "未設定"),
+                session_name=data.get("session_name", ""),
                 frame_name=data.get("frame_name", ""),
                 sheet_name=data.get("sheet_name", ""),
                 created_at=created_at_str,
@@ -183,30 +203,96 @@ async def list_unreviewed_sessions():
     return sessions
 
 
+@router.get("/review/{session_id}/result")
+async def get_latest_review_result(session_id: str):
+    """
+    セッションの最新レビュー結果を返す（ページ復元用）。
+
+    ページを切り替えて戻ってきたとき、最後のレビュー結果を再表示するために使用する。
+    レビュー結果が存在しない場合は 404 を返す。
+    """
+    db = get_firestore_client()
+    session_ref = db.collection("sessions").document(session_id)
+
+    result_docs = (
+        session_ref.collection("review_results")
+        .order_by("reviewed_at", direction=firestore.Query.DESCENDING)
+        .limit(1)
+        .stream()
+    )
+    result_doc = next(result_docs, None)
+    if result_doc is None:
+        raise HTTPException(status_code=404, detail="レビュー結果が見つかりません")
+
+    data = result_doc.to_dict()
+    session_doc = session_ref.get()
+    mappings = session_doc.to_dict().get("mappings", []) if session_doc.exists else []
+
+    return {
+        "review_id": data.get("review_id", result_doc.id),
+        "review_items": data.get("review_items", []),
+        "summary": data.get("summary", ""),
+        "reviewed_at": data.get("reviewed_at", ""),
+        "mappings": mappings,
+        "retrieval_trace": [],
+        "feedbacks": data.get("feedbacks", []),
+    }
+
+
+@router.post("/review/{review_id}/feedbacks/sync")
+async def sync_feedbacks(review_id: str, request: FeedbackSyncRequest):
+    """
+    保存ボタン押下時に現在のフィードバック全件を一括で上書き保存する。
+
+    リアルタイム保存の漏れを補完するため、保存ボタン押下時に feedbacks 配列を
+    現在の状態で完全に上書きする。decided_count も再計算する。
+    """
+    db = get_firestore_client()
+    review_doc = _get_review_result_doc(db, review_id, request.session_id)
+    if review_doc is None:
+        raise HTTPException(status_code=404, detail=f"レビュー結果が見つかりません: {review_id}")
+
+    now = datetime.now(timezone.utc).isoformat()
+    feedbacks = []
+    for f in request.feedbacks:
+        decision = f.get("decision", "")
+        if decision not in ("accept", "reject"):
+            continue
+        ts_key = "accepted_at" if decision == "accept" else "rejected_at"
+        feedbacks.append({
+            "item_id": f["item_id"],
+            "decision": decision,
+            "comment": f.get("comment", ""),
+            ts_key: now,
+        })
+
+    review_doc.reference.update({
+        "feedbacks": feedbacks,
+        "decided_count": len(feedbacks),
+    })
+    return {"status": "synced", "count": len(feedbacks)}
+
+
 @router.delete("/review/{review_id}/feedback/{item_id}")
-async def undo_feedback(review_id: str, item_id: str):
+async def undo_feedback(review_id: str, item_id: str, session_id: str = Query("")):
     """
     承諾または棄却を取り消して未決定状態に戻す。
 
     Firestoreの feedbacks 配列から該当 item_id のエントリを削除する。
-    棄却時は元々Firestoreに書き込まないため、削除処理は不要（状態リセットのみ）。
     ※ review_stats（棄却率集計）の数値は遡及修正しない（近似値として許容）。
     """
     db = get_firestore_client()
-
-    review_docs = (
-        db.collection_group("review_results")
-        .where(filter=firestore.FieldFilter("review_id", "==", review_id))
-        .limit(1)
-        .stream()
-    )
-    review_doc = next(review_docs, None)
+    review_doc = _get_review_result_doc(db, review_id, session_id)
 
     if review_doc is not None:
         data = review_doc.to_dict()
-        # feedbacks 配列から該当 item_id のエントリを除外して上書き
-        new_feedbacks = [f for f in data.get("feedbacks", []) if f.get("item_id") != item_id]
-        review_doc.reference.update({"feedbacks": new_feedbacks})
+        old_feedbacks = data.get("feedbacks", [])
+        new_feedbacks = [f for f in old_feedbacks if f.get("item_id") != item_id]
+        # 承諾/棄却どちらも feedbacks に保存されているため、削除と decided_count デクリメントを行う。
+        review_doc.reference.update({
+            "feedbacks": new_feedbacks,
+            "decided_count": firestore.Increment(-1),
+        })
 
     return {"status": "undone"}
 
@@ -285,6 +371,23 @@ def _increment_feedback_stats(db, decision: str) -> None:
     except Exception as e:
         import logging
         logging.getLogger(__name__).warning("棄却率集計の書き込みに失敗しました: %s", e)
+
+
+def _record_langfuse_feedback(review_id: str, item_id: str, decision: str) -> None:
+    """Langfuse に承諾/棄却フィードバックをスコアとして記録する。"""
+    try:
+        from apps.backend.app.core.langfuse_client import get_langfuse
+        lf = get_langfuse()
+        if lf:
+            lf.score(
+                trace_id=review_id,
+                name="feedback",
+                value=1.0 if decision == "accept" else 0.0,
+                comment=f"item_id={item_id}, decision={decision}",
+            )
+    except Exception as e:
+        import logging
+        logging.getLogger(__name__).debug("Langfuse フィードバック記録エラー（無視）: %s", e)
 
 
 def _build_phase2_reasons(rejection_rate: float, monthly_total: int) -> list[str]:

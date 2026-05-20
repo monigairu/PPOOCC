@@ -15,6 +15,8 @@ const COLORS = {
   accentGlow: "rgba(79,142,247,0.25)",
   success: "#34d399",
   successSoft: "rgba(52,211,153,0.1)",
+  warning: "#fbbf24",
+  warningSoft: "rgba(251,191,36,0.12)",
   text: "#e2e8f0",
   textMuted: "#8892a4",
   textDim: "#4a5568",
@@ -70,7 +72,6 @@ const styles = {
     overflow: "hidden",
     gap: 0,
   },
-  // ── 左パネル ──
   leftPanel: {
     width: "260px",
     flexShrink: 0,
@@ -89,14 +90,12 @@ const styles = {
     textTransform: "uppercase",
     color: COLORS.textMuted,
   },
-  // ── 中央パネル ──
   centerPanel: {
     flex: 1,
     display: "flex",
     flexDirection: "column",
     overflow: "hidden",
   },
-  // ── 右パネル ──
   rightPanel: {
     width: "320px",
     flexShrink: 0,
@@ -124,7 +123,6 @@ export function AppHeader({ rightSlot }) {
       <span style={styles.headerBadge}>PoC</span>
       <h1 style={styles.headerTitle}>NuRO</h1>
 
-      {/* ナビタブ */}
       <div style={{ display: "flex", gap: "4px", marginLeft: "12px" }}>
         {tabs.map(({ path, label }) => {
           const isActive = currentPath === path;
@@ -156,6 +154,107 @@ export function AppHeader({ rightSlot }) {
   );
 }
 
+// ── スピナー ──────────────────────────────────
+function Spinner() {
+  return (
+    <div style={{
+      width: "14px",
+      height: "14px",
+      border: "2px solid rgba(255,255,255,0.3)",
+      borderTop: "2px solid #fff",
+      borderRadius: "50%",
+      animation: "spin 0.8s linear infinite",
+      display: "inline-block",
+    }} />
+  );
+}
+
+// ── セッション履歴サイドバー ────────────────────
+function SessionHistorySidebar({ sessions, selectedSessionId, onSelect, onNewClick, isLoading }) {
+  const SessionItem = ({ session }) => {
+    const isSelected = selectedSessionId === session.session_id;
+    const label = session.session_name || session.utility_name || "未設定";
+
+    return (
+      <div
+        onClick={() => onSelect(session)}
+        style={{
+          padding: "9px 14px",
+          cursor: "pointer",
+          background: isSelected ? COLORS.accentSoft : "transparent",
+          borderLeft: `3px solid ${isSelected ? COLORS.accent : "transparent"}`,
+          borderBottom: `1px solid ${COLORS.border}`,
+          transition: "background 0.12s",
+        }}
+        onMouseEnter={e => { if (!isSelected) e.currentTarget.style.background = COLORS.surfaceHover; }}
+        onMouseLeave={e => { if (!isSelected) e.currentTarget.style.background = "transparent"; }}
+      >
+        <div style={{
+          fontSize: "12px",
+          color: isSelected ? COLORS.accent : COLORS.text,
+          fontWeight: 600,
+          overflow: "hidden",
+          textOverflow: "ellipsis",
+          whiteSpace: "nowrap",
+          marginBottom: "3px",
+        }}>
+          {label}
+        </div>
+        <div style={{ fontSize: "10px", color: COLORS.textDim }}>
+          {session.created_at
+            ? new Date(session.created_at).toLocaleDateString("ja-JP", { month: "2-digit", day: "2-digit" })
+            : ""}
+        </div>
+      </div>
+    );
+  };
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", height: "100%" }}>
+      {/* 新規転記ボタン */}
+      <div style={{ padding: "12px 14px", borderBottom: `1px solid ${COLORS.border}` }}>
+        <button
+          onClick={onNewClick}
+          style={{
+            width: "100%",
+            padding: "8px",
+            borderRadius: "6px",
+            border: `1px solid ${COLORS.accent}`,
+            background: COLORS.accentSoft,
+            color: COLORS.accent,
+            fontSize: "12px",
+            fontWeight: 700,
+            cursor: "pointer",
+            fontFamily: "inherit",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            gap: "6px",
+          }}
+        >
+          + 新規転記
+        </button>
+      </div>
+
+      {/* セッション一覧（フラットリスト・新しい順） */}
+      <div style={{ flex: 1, overflow: "auto" }}>
+        {isLoading ? (
+          <div style={{ padding: "24px", textAlign: "center", color: COLORS.textDim, fontSize: "12px", display: "flex", flexDirection: "column", alignItems: "center", gap: "8px" }}>
+            <Spinner />
+            <span>読み込み中...</span>
+          </div>
+        ) : sessions.length === 0 ? (
+          <div style={{ padding: "20px 14px", fontSize: "11px", color: COLORS.textDim }}>
+            転記履歴がありません
+          </div>
+        ) : (
+          sessions.map(s => <SessionItem key={s.session_id} session={s} />)
+        )}
+      </div>
+    </div>
+  );
+}
+
 // ── アップロードゾーン ─────────────────────────
 function UploadZone({ onFileSelect, file, isLoading }) {
   const inputRef = useRef(null);
@@ -170,7 +269,6 @@ function UploadZone({ onFileSelect, file, isLoading }) {
 
   return (
     <div style={{ padding: "16px", flex: 1, display: "flex", flexDirection: "column", gap: "12px" }}>
-      {/* ドラッグ&ドロップゾーン */}
       <div
         onClick={() => inputRef.current?.click()}
         onDragOver={(e) => { e.preventDefault(); setIsDragOver(true); }}
@@ -202,7 +300,6 @@ function UploadZone({ onFileSelect, file, isLoading }) {
         />
       </div>
 
-      {/* 選択済みファイル表示 */}
       {file && (
         <div style={{
           padding: "10px 12px",
@@ -222,7 +319,6 @@ function UploadZone({ onFileSelect, file, isLoading }) {
         </div>
       )}
 
-      {/* シート選択 */}
       <div>
         <div style={{ fontSize: "11px", color: COLORS.textMuted, marginBottom: "6px", fontWeight: 600 }}>
           対象シート
@@ -240,7 +336,6 @@ function UploadZone({ onFileSelect, file, isLoading }) {
         </div>
       </div>
 
-      {/* 説明テキスト */}
       <div style={{
         padding: "10px 12px",
         borderRadius: "6px",
@@ -283,6 +378,7 @@ function RunButton({ onClick, isLoading, disabled }) {
           alignItems: "center",
           justifyContent: "center",
           gap: "8px",
+          fontFamily: "inherit",
         }}
       >
         {isLoading ? (
@@ -295,20 +391,6 @@ function RunButton({ onClick, isLoading, disabled }) {
         )}
       </button>
     </div>
-  );
-}
-
-// ── スピナー ──────────────────────────────────
-function Spinner() {
-  return (
-    <div style={{
-      width: "14px",
-      height: "14px",
-      border: "2px solid rgba(255,255,255,0.3)",
-      borderTop: "2px solid #fff",
-      borderRadius: "50%",
-      animation: "spin 0.8s linear infinite",
-    }} />
   );
 }
 
@@ -326,8 +408,8 @@ function MappingTable({ mappings, onCellClick, selectedCell }) {
         color: COLORS.textDim,
       }}>
         <div style={{ fontSize: "40px", opacity: 0.3 }}>📋</div>
-        <div style={{ fontSize: "13px" }}>資料ファイルをアップロードして</div>
-        <div style={{ fontSize: "13px" }}>転記を実行してください</div>
+        <div style={{ fontSize: "13px" }}>左のサイドバーからセッションを選択するか</div>
+        <div style={{ fontSize: "13px" }}>新規転記を実行してください</div>
       </div>
     );
   }
@@ -414,7 +496,6 @@ function colIdxToLetter(n) {
 }
 
 // ── Excelグリッドビュー ────────────────────────
-// template / templateError は App 親コンポーネントから渡される（タブ切替で再fetchしない）
 function ExcelGridView({ mappings, onCellClick, selectedCell, template, templateError }) {
   const [hoveredAddr, setHoveredAddr] = useState(null);
 
@@ -440,7 +521,6 @@ function ExcelGridView({ mappings, onCellClick, selectedCell, template, template
 
   const { max_row, max_col, cells, merged_cells, col_widths, row_heights } = template;
 
-  // 2Dグリッドを構築
   const grid = Array.from({ length: max_row }, (_, r) =>
     Array.from({ length: max_col }, (_, c) => ({
       row: r + 1, col: c + 1,
@@ -468,7 +548,6 @@ function ExcelGridView({ mappings, onCellClick, selectedCell, template, template
 
   return (
     <div style={{ flex: 1, overflow: "auto", padding: "8px 12px" }}>
-      {/* 凡例 */}
       {Object.keys(mappingMap).length > 0 && (
         <div style={{ display: "flex", gap: "16px", marginBottom: "8px", fontSize: "11px", color: COLORS.textMuted, alignItems: "center" }}>
           <span style={{ display: "flex", alignItems: "center", gap: "5px" }}>
@@ -552,7 +631,6 @@ function ChatPanel({ selectedCell, sessionId }) {
   const [isLoading, setIsLoading] = useState(false);
   const bottomRef = useRef(null);
 
-  // セルが選択されたらAIから先行メッセージ
   useEffect(() => {
     if (!selectedCell) return;
     setMessages((prev) => [
@@ -564,7 +642,6 @@ function ChatPanel({ selectedCell, sessionId }) {
     ]);
   }, [selectedCell]);
 
-  // スクロール
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
@@ -591,7 +668,7 @@ function ChatPanel({ selectedCell, sessionId }) {
       });
       const data = await res.json();
       setMessages((prev) => [...prev, { role: "ai", text: data.answer }]);
-    } catch (e) {
+    } catch {
       setMessages((prev) => [...prev, { role: "ai", text: "エラーが発生しました。バックエンドが起動しているか確認してください。" }]);
     } finally {
       setIsLoading(false);
@@ -600,7 +677,6 @@ function ChatPanel({ selectedCell, sessionId }) {
 
   return (
     <>
-      {/* 選択中セル表示 */}
       {selectedCell && (
         <div style={{
           padding: "10px 16px",
@@ -627,7 +703,6 @@ function ChatPanel({ selectedCell, sessionId }) {
         </div>
       )}
 
-      {/* メッセージ一覧 */}
       <div style={{ flex: 1, overflow: "auto", padding: "16px", display: "flex", flexDirection: "column", gap: "12px" }}>
         {messages.map((m, i) => (
           <div key={i} style={{
@@ -636,22 +711,15 @@ function ChatPanel({ selectedCell, sessionId }) {
             gap: "8px",
             alignItems: "flex-start",
           }}>
-            {/* アバター */}
             <div style={{
-              width: "28px",
-              height: "28px",
-              borderRadius: "50%",
-              flexShrink: 0,
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
+              width: "28px", height: "28px", borderRadius: "50%", flexShrink: 0,
+              display: "flex", alignItems: "center", justifyContent: "center",
               fontSize: "13px",
               background: m.role === "user" ? COLORS.userBubble : COLORS.accentSoft,
               border: `1px solid ${m.role === "user" ? "#2a4a7f" : COLORS.borderLight}`,
             }}>
               {m.role === "user" ? "👤" : "🤖"}
             </div>
-            {/* バブル */}
             <div style={{
               maxWidth: "80%",
               padding: "10px 13px",
@@ -688,7 +756,6 @@ function ChatPanel({ selectedCell, sessionId }) {
         <div ref={bottomRef} />
       </div>
 
-      {/* 入力エリア */}
       <div style={{
         padding: "12px 16px",
         borderTop: `1px solid ${COLORS.border}`,
@@ -738,29 +805,96 @@ function ChatPanel({ selectedCell, sessionId }) {
 
 // ── メインアプリ ───────────────────────────────
 export default function App() {
-  const [file, setFile] = useState(null);
-  const [isLoading, setIsLoading] = useState(false);
-  const [mappings, setMappings] = useState([]);
-  const [sessionId, setSessionId] = useState(null);
-  const [frameName, setFrameName] = useState("frameB");
+  // 転記結果
+  const [file, setFile]             = useState(null);
+  const [isLoading, setIsLoading]   = useState(false);
+  const [mappings, setMappings]     = useState([]);
+  const [sessionId, setSessionId]   = useState(null);
+  const [frameName, setFrameName]   = useState("frameB");
   const [selectedCell, setSelectedCell] = useState(null);
   const [statusMessage, setStatusMessage] = useState("");
-  const [error, setError] = useState("");
-  const [viewMode, setViewMode] = useState("table"); // "table" | "grid"
+  const [error, setError]           = useState("");
+  const [viewMode, setViewMode]     = useState("table");
+
+  // テンプレート
+  const [template, setTemplate]         = useState(null);
+  const [templateError, setTemplateError] = useState(null);
+  const [resultTemplate, setResultTemplate] = useState(null);
+
+  // 履歴サイドバー
+  const [leftMode, setLeftMode]               = useState("history"); // "history" | "upload"
+  const [sessions, setSessions]               = useState([]);
+  const [sessionsLoading, setSessionsLoading] = useState(false);
+  const [selectedSession, setSelectedSession] = useState(null);
 
   // 空テンプレートは起動時に一度だけ取得
-  const [template, setTemplate] = useState(null);
-  const [templateError, setTemplateError] = useState(null);
   useEffect(() => {
     fetch(`${API_BASE}/template?sheet_name=MRC1`)
       .then((r) => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.json(); })
       .then(setTemplate)
       .catch((e) => setTemplateError(e.message));
+    fetchSessions();
   }, []);
 
-  // 転記後の出力ファイルレイアウト（解体機器の行を含む）
-  const [resultTemplate, setResultTemplate] = useState(null);
+  const fetchSessions = async () => {
+    setSessionsLoading(true);
+    try {
+      const res = await fetch(`${API_BASE}/sessions`);
+      if (res.ok) setSessions(await res.json());
+    } catch {
+      // サイドバー取得失敗は無視
+    } finally {
+      setSessionsLoading(false);
+    }
+  };
 
+  // 履歴セッション選択
+  const handleSelectSession = async (session) => {
+    setSelectedSession(session);
+    setSelectedCell(null);
+    setStatusMessage("");
+    setError("");
+    setMappings([]);
+    setResultTemplate(null);
+
+    try {
+      const res = await fetch(`${API_BASE}/sessions/${session.session_id}/mappings`);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
+      setMappings(data.mappings);
+      setSessionId(data.session_id);
+      const fn = data.frame_name || "frameB";
+      setFrameName(fn);
+
+      fetch(`${API_BASE}/result-layout/${data.session_id}?frame_name=${fn}&sheet_name=MRC1`)
+        .then(r => r.ok ? r.json() : null)
+        .then(layout => { if (layout) setResultTemplate(layout); })
+        .catch(() => {});
+    } catch (e) {
+      setError(e.message);
+    }
+  };
+
+  // 新規転記モードに切替
+  const handleNewClick = () => {
+    setLeftMode("upload");
+    setSelectedSession(null);
+    setMappings([]);
+    setSessionId(null);
+    setSelectedCell(null);
+    setStatusMessage("");
+    setError("");
+    setResultTemplate(null);
+    setFile(null);
+  };
+
+  // 履歴モードに戻る
+  const handleBackToHistory = () => {
+    setLeftMode("history");
+    fetchSessions();
+  };
+
+  // 新規転記実行
   const handleRun = async () => {
     if (!file) return;
     setIsLoading(true);
@@ -791,8 +925,8 @@ export default function App() {
       const fn = data.frame_name || "frameB";
       setFrameName(fn);
       setStatusMessage(data.message);
+      setSelectedSession(null);
 
-      // 転記済み出力ファイルのレイアウトを取得（解体機器の行を含む）
       fetch(`${API_BASE}/result-layout/${data.session_id}?frame_name=${fn}&sheet_name=MRC1`)
         .then((r) => r.ok ? r.json() : null)
         .then((layout) => { if (layout) setResultTemplate(layout); })
@@ -805,9 +939,18 @@ export default function App() {
     }
   };
 
+  // ヘッダー右スロット: レビュー完了セッション or 新規転記完了時にダウンロードリンクを表示
+  const isCompleted = selectedSession?.review_status === "completed";
+  const showDownload = sessionId && (leftMode === "upload" || isCompleted);
+  const headerRight = showDownload
+    ? <a href={`${API_BASE}/download/${sessionId}?frame_name=${frameName}`}
+         style={{ color: COLORS.accent, textDecoration: "none", fontSize: "12px" }}>
+        ⬇ Excelをダウンロード
+      </a>
+    : <span style={{ fontSize: "12px", color: COLORS.textMuted }}>MRC1 — 計実_様式2_PBG_工事概要①</span>;
+
   return (
     <div style={styles.app}>
-      {/* CSS アニメーション */}
       <style>{`
         @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;500;600;700&display=swap');
         @keyframes spin { to { transform: rotate(360deg); } }
@@ -817,27 +960,55 @@ export default function App() {
         ::-webkit-scrollbar-thumb { background: #2a2e42; border-radius: 3px; }
       `}</style>
 
-      {/* ヘッダー */}
-      <AppHeader
-        rightSlot={
-          sessionId
-            ? <a href={`${API_BASE}/download/${sessionId}?frame_name=${frameName}`}
-                 style={{ color: COLORS.accent, textDecoration: "none", fontSize: "12px" }}>
-                ⬇ Excelをダウンロード
-              </a>
-            : <span style={{ fontSize: "12px", color: COLORS.textMuted }}>MRC1 — 計実_様式2_PBG_工事概要①</span>
-        }
-      />
+      <AppHeader rightSlot={headerRight} />
 
       <div style={styles.body}>
-        {/* ── 左パネル: アップロード ── */}
+        {/* ── 左パネル ── */}
         <div style={styles.leftPanel}>
-          <div style={styles.panelHeader}>資料アップロード</div>
-          <UploadZone onFileSelect={setFile} file={file} isLoading={isLoading} />
-          <RunButton onClick={handleRun} isLoading={isLoading} disabled={!file} />
+          {leftMode === "history" ? (
+            <SessionHistorySidebar
+              sessions={sessions}
+              selectedSessionId={selectedSession?.session_id}
+              onSelect={handleSelectSession}
+              onNewClick={handleNewClick}
+              isLoading={sessionsLoading}
+            />
+          ) : (
+            <>
+              {/* 新規転記モード: 戻るボタン + アップロードゾーン */}
+              <div style={{
+                padding: "10px 14px",
+                borderBottom: `1px solid ${COLORS.border}`,
+                display: "flex",
+                alignItems: "center",
+                gap: "8px",
+              }}>
+                <button
+                  onClick={handleBackToHistory}
+                  style={{
+                    padding: "5px 10px",
+                    borderRadius: "5px",
+                    border: `1px solid ${COLORS.border}`,
+                    background: "transparent",
+                    color: COLORS.textMuted,
+                    fontSize: "11px",
+                    cursor: "pointer",
+                    fontFamily: "inherit",
+                  }}
+                >
+                  ← 履歴
+                </button>
+                <span style={{ fontSize: "11px", fontWeight: 700, color: COLORS.textMuted, letterSpacing: "0.08em", textTransform: "uppercase" }}>
+                  新規転記
+                </span>
+              </div>
+              <UploadZone onFileSelect={setFile} file={file} isLoading={isLoading} />
+              <RunButton onClick={handleRun} isLoading={isLoading} disabled={!file} />
+            </>
+          )}
         </div>
 
-        {/* ── 中央パネル: 転記結果 ── */}
+        {/* ── 中央パネル ── */}
         <div style={styles.centerPanel}>
           <div style={{
             ...styles.panelHeader,
@@ -848,23 +1019,25 @@ export default function App() {
             borderBottom: `1px solid ${COLORS.border}`,
           }}>
             <span>転記結果</span>
-            {/* 表示モード切替 */}
-            <div style={{ display: "flex", gap: "4px" }}>
-              {[{ key: "table", label: "テーブル" }, { key: "grid", label: "様式プレビュー" }].map(({ key, label }) => (
-                <button
-                  key={key}
-                  onClick={() => setViewMode(key)}
-                  style={{
-                    padding: "3px 10px", borderRadius: "4px",
-                    border: `1px solid ${viewMode === key ? COLORS.accent : COLORS.border}`,
-                    background: viewMode === key ? COLORS.accentSoft : "transparent",
-                    color: viewMode === key ? COLORS.accent : COLORS.textMuted,
-                    cursor: "pointer", fontSize: "11px", fontWeight: 600,
-                    textTransform: "none", letterSpacing: 0, transition: "all 0.15s",
-                  }}
-                >{label}</button>
-              ))}
-            </div>
+            {mappings.length > 0 && (
+              <div style={{ display: "flex", gap: "4px" }}>
+                {[{ key: "table", label: "テーブル" }, { key: "grid", label: "様式プレビュー" }].map(({ key, label }) => (
+                  <button
+                    key={key}
+                    onClick={() => setViewMode(key)}
+                    style={{
+                      padding: "3px 10px", borderRadius: "4px",
+                      border: `1px solid ${viewMode === key ? COLORS.accent : COLORS.border}`,
+                      background: viewMode === key ? COLORS.accentSoft : "transparent",
+                      color: viewMode === key ? COLORS.accent : COLORS.textMuted,
+                      cursor: "pointer", fontSize: "11px", fontWeight: 600,
+                      textTransform: "none", letterSpacing: 0, transition: "all 0.15s",
+                      fontFamily: "inherit",
+                    }}
+                  >{label}</button>
+                ))}
+              </div>
+            )}
             {statusMessage && (
               <span style={{ fontSize: "11px", color: COLORS.success, fontWeight: 600, textTransform: "none", letterSpacing: 0 }}>
                 ✓ {statusMessage}
