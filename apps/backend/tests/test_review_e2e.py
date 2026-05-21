@@ -251,9 +251,8 @@ def _make_mock_firestore(mappings: list[dict] = MOCK_MAPPINGS, reviewed: bool = 
 
 _REVIEW_FS_PATH   = "apps.backend.app.api.routes.review.get_firestore_client"
 _UPLOAD_FS_PATH   = "apps.backend.app.api.routes.upload.get_firestore_client"
-# reviewer_agent は call_gemini をモジュールロード時にインポートするため
-# モック先はそちらのモジュール内の名前を指定する（標準的な Python mock のプラクティス）
-_GEMINI_PATH      = "apps.backend.app.agents.reviewer.reviewer_agent.call_gemini"
+# ADK 移行後、call_gemini は adk/agents.py 内で使われるためモック先を変更
+_GEMINI_PATH      = "apps.backend.app.agents.reviewer.adk.agents.call_gemini"
 
 
 @pytest.fixture

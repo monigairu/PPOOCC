@@ -153,7 +153,8 @@ async def submit_feedback(review_id: str, request: FeedbackRequest):
     _increment_feedback_stats(db=db, decision=request.decision)
     _record_langfuse_feedback(review_id=review_id, item_id=request.item_id, decision=request.decision)
 
-    return FeedbackResponse(status="saved")
+    status = "saved" if request.decision == "accept" else "discarded"
+    return FeedbackResponse(status=status)
 
 
 @router.get("/review/sessions", response_model=list[SessionSummary])
