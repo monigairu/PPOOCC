@@ -8,15 +8,11 @@ FastAPI アプリケーション本体
     API:    http://localhost:8000/api/
     ドキュメント: http://localhost:8000/docs
 """
-from dotenv import load_dotenv
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from apps.backend.app.api.routes import upload, chat, template, review, sessions
 from apps.backend.app.core.settings import CORS_ORIGINS
-
-# .envファイルの読み込み（Vertex AI認証情報など）
-load_dotenv()
 
 # ── FastAPIアプリの初期化 ──────────────────────
 app = FastAPI(

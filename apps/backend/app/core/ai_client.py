@@ -20,9 +20,8 @@ def call_gemini(prompt, model_name="gemini-2.5-flash", system_instruction: str =
     client = _get_client()
     config = types.GenerateContentConfig(
         temperature=0.0,  # 再現性のため固定（同じ入力で同じ出力を得る）
+        system_instruction=system_instruction or None,
     )
-    if system_instruction:
-        config.system_instruction = system_instruction
     response = client.models.generate_content(
         model=model_name,
         contents=prompt,

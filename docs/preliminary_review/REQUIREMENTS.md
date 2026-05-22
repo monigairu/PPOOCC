@@ -297,7 +297,7 @@ sessions/{session_id}/
 |---|---|---|---|
 | Phase1 | 構造化フィルタ型RAG・E2E検証 | 完了 | 100% |
 | Phase2 | Vertex AI Search・ハイブリッド検索 | 完了 | 100% |
-| Phase3 | Gemini 3マルチモーダル前処理 | 未着手 | 0% |
+| Phase3 | Gemini 3マルチモーダル前処理 | 実装中 | 0%（詳細要件: Section 14） |
 
 ### Phase2 完了内容
 
@@ -353,6 +353,164 @@ sessions/{session_id}/
 | 類似工事データ（Tool3） | 討議中 | データ入手後にVertex AI Searchに投入 |
 | reactor_typeの絞り込み | F3スキーマに列なし | Phase2でVertex AI Searchのフィルタで対応 |
 | セルフレビュー（/self-review） | 事前レビュー完成後に別途開発 | review_modeパラメータで分岐する設計 |
+
+---
+
+## 14. Phase 3 詳細要件：マルチモーダル補足資料 RAG
+
+最終更新：2026-05-21
+
+### 14-1. 目的
+
+Phase 2 までの `load_supplement()` は Excel のテキスト部分しか読めていない。
+Phase 3 では写真・図面（画像）をキャプション化して Vertex AI Search に投入し、
+レビュー時に画像の内容も根拠として使えるようにする。
+
+### 14-2. 対象ファイル形式と内容
+
+| ファイル形式 | 内容 | 格納場所 |
+|---|---|---|
+| Excel (.xlsx) | 1シート1工事。「撤去前→撤去後」の写真2枚＋工事名テキスト | `data/knowledge/supplement/*.xlsx` |
+| PPTX (.pptx) | 建屋平面図に工事進捗を色で重ね書き。工事ID・工事名・作業エリア名のテキストと位置・色情報 | `data/knowledge/supplement/*.pptx` |
+
+### 14-3. 全体フロー
+
+```
+【前処理：データ投入時・一度だけ実行】
+
+data/knowledge/supplement/
+  ├── *.xlsx  ─── openpyxl で画像バイト列 + 周辺セルテキスト抽出
+  └── *.pptx  ─── python-pptx で画像バイト列 + 近傍テキスト抽出
+                          │
+                          ▼
+              Gemini 3 Flash（マルチモーダル）
+              「{context_text} と書かれた枠の写真です。
+                工事状態を説明してください。」
+                          │
+                          ▼ キャプション生成
+              data/knowledge/supplement_captions/*.json  ← 確認・修正用の中間ファイル
+                          │
+                          ▼ 投入
+              Vertex AI Search（nuro-supplement-knowledge）
+
+【レビュー実行時：毎回】
+
+knowledge_loader.load_supplement()
+  → Vertex AI Search でキャプションをハイブリッド検索
+  → 上位 N 件のキャプション + メタデータを返す
+  → synthesis_node が Gemini レビュー生成プロンプトに組み込む
+```
+
+### 14-4. 新規追加スクリプト
+
+#### `scripts/generate_supplement_captions.py`（新規）
+
+```
+役割  : 補足資料ファイルから画像を抽出し Gemini 3 でキャプションを生成する
+入力  : data/knowledge/supplement/*.xlsx / *.pptx
+出力  : data/knowledge/supplement_captions/{source_file}.json
+実行  : uv run python scripts/generate_supplement_captions.py
+       uv run python scripts/generate_supplement_captions.py --file 東北電力_補足.xlsx
+
+出力JSONの1件の構造:
+  {
+    "id":               "{utility_name}_{source_file}_{image_index:03d}",
+    "caption":          "PPパネルが完全に撤去されており工事完了状態",
+    "utility_name":     "東北電力",
+    "fee_type":         "解体費",
+    "source_file":      "東北電力_補足.xlsx",
+    "construction_name":"○○建屋解体工事",
+    "context_text":     "撤去後",
+    "original_format":  "excel"
+  }
+```
+
+キャプション生成プロンプト（形式別）:
+
+| 形式 | プロンプト |
+|---|---|
+| Excel | `「{construction_name}」の補足資料です。「{context_text}」と書かれた枠の写真です。工事の状態や作業内容を具体的に説明してください。` |
+| PPTX | `建屋平面図の工事進捗図です。「{construction_name}」（{work_area}エリア）を示しています。図中の色分けや工事の進捗状態を説明してください。` |
+
+使用モデル: `gemini-3-flash-preview`（マルチモーダル・1M トークン対応）
+
+#### `scripts/create_datastores.py`（追記）
+
+`nuro-supplement-knowledge` データストアを追加する。
+
+```python
+# 追加するエントリ
+{
+    "datastore_id": "nuro-supplement-knowledge",
+    "display_name": "NuRO Supplement Knowledge (補足資料キャプション)",
+    "env_key": "VERTEX_SEARCH_SUPPLEMENT_DATASTORE_ID",
+}
+```
+
+#### `scripts/ingest_knowledge.py`（追記）
+
+`--target supplement` オプションを追加し、生成済みキャプション JSON を Vertex AI Search に投入する。
+
+```
+ドキュメント構造:
+  id          : "{utility_name}_{source_file}_{image_index:03d}"
+  content     : キャプションテキスト（BM25 + ベクトル検索の対象）
+  struct_data :
+    knowledge_type    : "supplement"
+    utility_name      : str
+    fee_type          : str
+    source_file       : str
+    construction_name : str
+    context_text      : str   （「撤去後」「撤去前」等）
+    original_format   : "excel" or "pptx"
+```
+
+### 14-5. 変更するファイル
+
+| ファイル | 変更内容 | I/F 変更 |
+|---|---|---|
+| `pyproject.toml` | `python-pptx` を依存追加 | — |
+| `apps/backend/app/core/settings.py` | `VERTEX_SEARCH_SUPPLEMENT_DATASTORE_ID` / `_ENGINE_ID` を追加 | なし |
+| `apps/backend/app/agents/reviewer/knowledge_loader.py` | `load_supplement()` 内部を Vertex AI Search 化 | **なし**（引数・戻り値は不変） |
+| `scripts/create_datastores.py` | supplement データストアのエントリを追加 | — |
+| `scripts/ingest_knowledge.py` | `--target supplement` オプションを追加 | — |
+| `scripts/generate_supplement_captions.py` | **新規作成** | — |
+| `apps/backend/tests/test_review_e2e.py` | supplement モックを Vertex AI Search レスポンス形式に更新 | — |
+
+変更不要なファイル: `reviewer_agent.py`・`adk/agents.py`（`supplement_node()`）・API エンドポイント・フロントエンド
+
+### 14-6. 環境変数の追加
+
+`.env` に以下を追加する（`create_datastores.py` 実行後に出力された値を設定）:
+
+```
+VERTEX_SEARCH_SUPPLEMENT_DATASTORE_ID=nuro-supplement-knowledge
+VERTEX_SEARCH_SUPPLEMENT_ENGINE_ID=nuro-supplement-engine
+```
+
+### 14-7. 精度評価と第2選択肢
+
+Phase 3 完了後、NuRO 担当者によるレビュー精度評価を行い、以下の基準で第2選択肢への移行を判断する。
+
+| 評価基準 | 第2選択肢への移行判断 |
+|---|---|
+| キャプション検索でヒットしない関連補足資料がある | Vertex AI Multimodal Embeddings の採用を検討 |
+| キャプションの品質が低い（誤解釈が多い） | プロンプト改善 or モデルアップグレードを先に試みる |
+| テキストと画像の混合検索が必要 | キャプション + Multimodal Embeddings のハイブリッドアプローチ |
+
+**Document AI は使用しない**（写真の内容・図面の色情報を理解できないため）。Gemini 3 マルチモーダルで代替する。
+
+### 14-8. 実装ステップ
+
+| Step | 内容 |
+|---|---|
+| 1 | 補足資料ファイル収集・`data/knowledge/supplement/` に配置 |
+| 2 | `python-pptx` 依存追加（`pyproject.toml`） |
+| 3 | `create_datastores.py` に supplement データストアを追加して実行 |
+| 4 | `generate_supplement_captions.py` を実装・実行（中間JSONで内容確認） |
+| 5 | `ingest_knowledge.py` に `--target supplement` を追加して実行 |
+| 6 | `knowledge_loader.load_supplement()` 内部を Vertex AI Search 化 |
+| 7 | E2E テスト更新・全テスト通過確認 |
 
 ---
 

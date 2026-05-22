@@ -14,15 +14,14 @@ Phase 2（現在）：Vertex AI Search ハイブリッド検索
   Reranking で上位 N 件に絞る。
   knowledge_loader.py の内部実装のみ変更。
 
-Phase 3（PoC後半予定）：マルチモーダルRAG
-  Gemini 3 で写真・図面（補足資料Excel・PPTX）を処理。
-  Tool4（補足資料）の内部実装を拡張する。
+Phase 3（実装済み）：マルチモーダルRAG
+  generate_supplement_captions.py で Gemini がキャプション生成済みの画像を
+  Vertex AI Search で検索する。Tool4（load_supplement）の内部実装のみ変更。
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-Phase 2 の既知の制約：
-① load_similar_work()はデータ未入手のためスタブ（空リスト）
-② reactor_type フィルタは Vertex AI Search の struct_data 拡張で Phase 2 後半対応
-③ 補足資料の写真・図面は Phase 3 対応
+Phase 3 完了後の残存制約：
+① load_similar_work() はデータ未入手のためスタブ（空リスト）
+② reactor_type フィルタは Vertex AI Search の struct_data 拡張後に有効化
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 本番移行時の注意：
@@ -45,6 +44,8 @@ from apps.backend.app.core.settings import (
     VERTEX_SEARCH_F3_DATASTORE_ID,
     VERTEX_SEARCH_F2_ENGINE_ID,
     VERTEX_SEARCH_F3_ENGINE_ID,
+    VERTEX_SEARCH_SUPPLEMENT_DATASTORE_ID,
+    VERTEX_SEARCH_SUPPLEMENT_ENGINE_ID,
 )
 
 logger = logging.getLogger(__name__)
@@ -68,8 +69,9 @@ def _serving_config(datastore_id: str) -> str:
     エンジンIDが設定されていればエンジン経由（推奨）、なければデータストア直接。
     """
     engine_id = (
-        VERTEX_SEARCH_F2_ENGINE_ID if datastore_id == VERTEX_SEARCH_F2_DATASTORE_ID
-        else VERTEX_SEARCH_F3_ENGINE_ID if datastore_id == VERTEX_SEARCH_F3_DATASTORE_ID
+        VERTEX_SEARCH_F2_ENGINE_ID         if datastore_id == VERTEX_SEARCH_F2_DATASTORE_ID
+        else VERTEX_SEARCH_F3_ENGINE_ID    if datastore_id == VERTEX_SEARCH_F3_DATASTORE_ID
+        else VERTEX_SEARCH_SUPPLEMENT_ENGINE_ID if datastore_id == VERTEX_SEARCH_SUPPLEMENT_DATASTORE_ID
         else ""
     )
     if engine_id:
@@ -287,55 +289,49 @@ def load_supplement(
     limit: int = 20,
 ) -> list[dict[str, Any]]:
     """
-    補足資料（Tool4）のテキスト情報を返す。
+    補足資料（Tool4）のキャプション情報を Vertex AI Search から返す。
 
-    Phase 2 現在：data/knowledge/supplement/ の Excel からテキストを読み込む。
-    Phase 3：Gemini 3 のマルチモーダルで写真・図面も処理予定。
+    Phase 3：generate_supplement_captions.py で生成したキャプションを
+             Vertex AI Search でハイブリッド検索する。
+    データストアが未設定の場合は空リストにフォールバック（テスト・PoC初期に対応）。
 
     Args:
         caller_role:   "NuRO" or "電力"（電力は空リストを返す）
-        utility_name:  将来の権限制御用（現在未使用）
-        fee_type:      テキスト内での絞り込み
+        utility_name:  申請電力会社名（フィルタには使用しない。NuROは全社参照可）
+        fee_type:      検索クエリに使用する費目
         limit:         返す件数の上限
 
     Returns:
-        補足資料辞書のリスト
+        補足資料辞書のリスト（caption, construction_name, context_text, source_file 等を含む）
     """
     if caller_role == "電力":
         return []
 
-    from pathlib import Path
-    import pandas as pd
-
-    supplement_dir = Path("data/knowledge/supplement")
-    if not supplement_dir.exists():
+    if not VERTEX_SEARCH_SUPPLEMENT_DATASTORE_ID:
+        logger.debug("VERTEX_SEARCH_SUPPLEMENT_DATASTORE_ID 未設定: 補足資料は空リストを返します")
         return []
 
-    records: list[dict] = []
-    for file_path in sorted(supplement_dir.glob("*.xlsx")):
-        try:
-            xl = pd.ExcelFile(file_path, engine="openpyxl")
-            for sheet in xl.sheet_names:
-                df = xl.parse(sheet, header=None, dtype=str).fillna("")
-                construction_name = df.iat[0, 0].strip() if len(df) > 0 else sheet
-                text_parts = [
-                    cell for row in df.values for cell in row
-                    if isinstance(cell, str) and len(cell.strip()) > 3
-                ]
-                text_content = " ".join(text_parts)[:500]
+    # NuROは全電力会社の補足資料を参照可能なため utility_name でフィルタしない
+    results = _search(
+        datastore_id=VERTEX_SEARCH_SUPPLEMENT_DATASTORE_ID,
+        query=fee_type or "",
+        limit=limit,
+    )
 
-                if fee_type and fee_type not in text_content:
-                    continue
+    # 戻り値を synthesis_node が期待する形式に整形
+    records = []
+    for r in results:
+        caption = r.get("caption") or r.get("message_content", "")
+        if not caption:
+            continue
+        records.append({
+            "source_file":       r.get("source_file", ""),
+            "sheet_name":        r.get("sheet_name", ""),
+            "construction_name": r.get("construction_name", ""),
+            "context_text":      r.get("context_text", ""),
+            "original_format":   r.get("original_format", ""),
+            "text_content":      caption,
+            "_doc_id":           r.get("_doc_id", ""),
+        })
 
-                records.append({
-                    "source_file": file_path.name,
-                    "sheet_name": sheet,
-                    "construction_name": construction_name,
-                    "text_content": text_content,
-                    # Phase 3：Gemini 3 マルチモーダルで処理予定
-                    "has_images": True,
-                })
-        except Exception as e:
-            logger.warning("補足資料の読み込みエラー: %s (%s)", file_path, e)
-
-    return records[:limit]
+    return records

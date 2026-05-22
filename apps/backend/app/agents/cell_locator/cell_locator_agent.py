@@ -14,7 +14,7 @@ from apps.backend.app.core.skill_loader import load_skill, render_skill
 
 
 def determine_cell_mapping(
-    json_data: dict[str, str],
+    json_data: dict,
     workbook: Workbook,
     sheet_name: str,
     frame_name: str = "frameB",
@@ -22,9 +22,10 @@ def determine_cell_mapping(
     """
     JSON データのキーを Excel のセル番地にマッピングする。
 
-    YAML定義（正確）とExcelスキャン（補助）の両方を使う。
+    固定レイアウト（YAML定義済み）フィールドは決定論的に解決。
+    YAML未定義フィールドのみ LLM にフォールバック。
+    リスト型フィールドはスキップ（tabular_handler が処理する）。
     """
-    # 1. YAMLからセル定義を取得（正確な情報）
     try:
         config = load_frame_config(frame_name, sheet_name)
         yaml_cell_defs = extract_cell_definitions(config)
@@ -35,45 +36,85 @@ def determine_cell_mapping(
         field_aliases = {}
         print("   YAML定義なし → スキャナーのみ使用")
 
-    # 2. Excelスキャンで補助情報を取得
-    label_map = scan_label_cells(workbook, sheet_name)
+    result: dict[str, list[str]] = {}
+    unknown_keys: list[str] = []
 
-    # 3. SKILL.md を読み込んでプロンプトを構築
-    skill_dir = Path(__file__).parent
-    skill_text = load_skill(skill_dir)
-    prompt = render_skill(
-        skill_text,
-        json_data=json.dumps(json_data, ensure_ascii=False, indent=2),
-        label_map=json.dumps(label_map, ensure_ascii=False, indent=2),
-        yaml_cell_defs=json.dumps(yaml_cell_defs, ensure_ascii=False, indent=2),
-        field_aliases=json.dumps(field_aliases, ensure_ascii=False, indent=2),
-    )
+    for key, value in json_data.items():
+        # リスト型は tabular_handler が処理するためスキップ
+        if isinstance(value, list):
+            continue
 
-    # 4. Gemini に問い合わせ
-    print("=== AI 判定中 ===")
-    response_text = call_gemini(prompt)
+        # YAML定義で確定するフィールド
+        if key in yaml_cell_defs:
+            result[key] = yaml_cell_defs[key]
+            print(f"   {key} → {yaml_cell_defs[key]}（YAML定義）")
+            continue
 
-    # 5. レスポンスを JSON としてパース
-    cleaned_text = _extract_json(response_text)
+        # field_aliases で解決できるか確認
+        resolved = _resolve_by_alias(key, yaml_cell_defs, field_aliases)
+        if resolved:
+            result[key] = resolved
+            print(f"   {key} → {resolved}（エイリアス解決）")
+            continue
 
-    try:
-        result = json.loads(cleaned_text)
-        mappings = result.get("mappings", {})
-        reasoning = result.get("reasoning", {})
+        # YAML未定義 → LLM で解決が必要
+        unknown_keys.append(key)
 
-        normalized = _normalize_mappings(mappings)
+    # YAML未定義フィールドがある場合のみ LLM を呼び出す
+    if unknown_keys:
+        print(f"=== YAML未定義フィールド {unknown_keys} → AI判定 ===")
+        unknown_data = {k: json_data[k] for k in unknown_keys}
+        label_map = scan_label_cells(workbook, sheet_name)
 
-        print("=== AI 判定結果 ===")
-        for key, cells in normalized.items():
-            reason = reasoning.get(key, "根拠なし")
-            print(f"  {key} → {cells}（理由: {reason}）")
+        skill_dir = Path(__file__).parent
+        skill_text = load_skill(skill_dir)
+        prompt = render_skill(
+            skill_text,
+            json_data=json.dumps(unknown_data, ensure_ascii=False, indent=2),
+            label_map=json.dumps(label_map, ensure_ascii=False, indent=2),
+            yaml_cell_defs=json.dumps(yaml_cell_defs, ensure_ascii=False, indent=2),
+            field_aliases=json.dumps(field_aliases, ensure_ascii=False, indent=2),
+        )
 
-        return normalized
+        response_text = call_gemini(prompt)
+        cleaned_text = _extract_json(response_text)
 
-    except json.JSONDecodeError as e:
-        print(f"AI の応答をパースできませんでした: {e}")
-        print(f"AI 応答内容: {response_text}")
-        return _fallback_mapping(json_data, yaml_cell_defs, label_map)
+        try:
+            ai_result = json.loads(cleaned_text)
+            mappings = ai_result.get("mappings", {})
+            reasoning = ai_result.get("reasoning", {})
+            normalized = _normalize_mappings(mappings)
+
+            for key, cells in normalized.items():
+                reason = reasoning.get(key, "根拠なし")
+                print(f"   {key} → {cells}（AI判定: {reason}）")
+
+            result.update(normalized)
+
+        except json.JSONDecodeError as e:
+            print(f"AI 応答パース失敗: {e}")
+            label_map_for_fallback = scan_label_cells(workbook, sheet_name) if not unknown_keys else label_map
+            for k in unknown_keys:
+                if k in label_map_for_fallback:
+                    result[k] = label_map_for_fallback[k]
+                    print(f"   {k} → {label_map_for_fallback[k]}（スキャナーフォールバック）")
+                else:
+                    result[k] = []
+                    print(f"   {k} → 不明（解決できませんでした）")
+
+    return result
+
+
+def _resolve_by_alias(
+    key: str,
+    yaml_cell_defs: dict[str, list[str]],
+    field_aliases: dict[str, list[str]],
+) -> list[str] | None:
+    """field_aliases を使ってキーを YAML 定義フィールドに解決する。"""
+    for yaml_key, aliases in field_aliases.items():
+        if key in aliases and yaml_key in yaml_cell_defs:
+            return yaml_cell_defs[yaml_key]
+    return None
 
 
 def _extract_json(text: str) -> str:
@@ -98,28 +139,3 @@ def _normalize_mappings(mappings: dict) -> dict[str, list[str]]:
         else:
             normalized[key] = []
     return normalized
-
-
-def _fallback_mapping(
-    json_data: dict[str, str],
-    yaml_cell_defs: dict[str, list[str]],
-    label_map: dict[str, list[str]],
-) -> dict[str, list[str]]:
-    """
-    AI 応答がパース失敗した場合のフォールバック処理。
-
-    YAMLを優先し、なければスキャナー結果を使う。
-    """
-    print("=== フォールバック ===")
-    fallback: dict[str, list[str]] = {}
-    for key in json_data.keys():
-        if key in yaml_cell_defs:
-            fallback[key] = yaml_cell_defs[key]
-            print(f"  {key} → {yaml_cell_defs[key]}（YAML定義）")
-        elif key in label_map:
-            fallback[key] = label_map[key]
-            print(f"  {key} → {label_map[key]}（スキャナー）")
-        else:
-            fallback[key] = []
-            print(f"  {key} → 不明")
-    return fallback

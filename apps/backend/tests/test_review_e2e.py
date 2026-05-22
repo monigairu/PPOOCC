@@ -203,6 +203,23 @@ class TestKnowledgeLoader:
         assert records[0]["message_direction"] == "nuro"
         assert records[1]["message_direction"] == "denryoku"
 
+    def test_supplement_returns_empty_for_denryoku(self):
+        """電力ロールは補足資料を参照できない（Phase 3）"""
+        from apps.backend.app.agents.reviewer.knowledge_loader import load_supplement
+        result = load_supplement(caller_role="電力")
+        assert result == []
+
+    def test_supplement_returns_empty_when_datastore_not_configured(self):
+        """データストアID未設定時は空リストにフォールバックする（Phase 3）"""
+        import apps.backend.app.agents.reviewer.knowledge_loader as kl
+        original = kl.VERTEX_SEARCH_SUPPLEMENT_DATASTORE_ID
+        try:
+            kl.VERTEX_SEARCH_SUPPLEMENT_DATASTORE_ID = ""
+            result = kl.load_supplement(caller_role="NuRO")
+            assert result == []
+        finally:
+            kl.VERTEX_SEARCH_SUPPLEMENT_DATASTORE_ID = original
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # 3. POST /api/review エンドポイント E2E テスト

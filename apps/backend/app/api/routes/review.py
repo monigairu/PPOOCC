@@ -17,6 +17,7 @@ Phase 2 移行判断トリガー（stats エンドポイントで確認）：
     - 月次指摘数が 10 件超（見落とし頻発）
     - ナレッジ量が急増（F3 > 1万件）
 """
+import logging
 import uuid
 from datetime import datetime, timezone
 
@@ -33,6 +34,8 @@ from apps.backend.app.api.models import (
     SessionSummary,
 )
 from apps.backend.app.core.firestore_client import get_firestore_client
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -370,8 +373,7 @@ def _increment_feedback_stats(db, decision: str) -> None:
             merge=True,
         )
     except Exception as e:
-        import logging
-        logging.getLogger(__name__).warning("棄却率集計の書き込みに失敗しました: %s", e)
+        logger.warning("棄却率集計の書き込みに失敗しました: %s", e)
 
 
 def _record_langfuse_feedback(review_id: str, item_id: str, decision: str) -> None:
@@ -387,8 +389,7 @@ def _record_langfuse_feedback(review_id: str, item_id: str, decision: str) -> No
                 comment=f"item_id={item_id}, decision={decision}",
             )
     except Exception as e:
-        import logging
-        logging.getLogger(__name__).debug("Langfuse フィードバック記録エラー（無視）: %s", e)
+        logger.debug("Langfuse フィードバック記録エラー（無視）: %s", e)
 
 
 def _build_phase2_reasons(rejection_rate: float, monthly_total: int) -> list[str]:

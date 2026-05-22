@@ -183,15 +183,15 @@ def _generate_rule_based_items(
 
 # ── プロンプト構築・レスポンスパース ──────────────────────────────────────────
 
-def _number_records(records: list[dict], prefix: str) -> tuple[str, list[dict]]:
+def _number_records(records: list[dict], prefix: str) -> str:
     if not records:
-        return "（なし）", []
+        return "（なし）"
     numbered = []
     for i, r in enumerate(records, 1):
         r2 = dict(r)
         r2["_ref"] = f"[{prefix}#{i}]"
         numbered.append(r2)
-    return json.dumps(numbered, ensure_ascii=False, indent=2), numbered
+    return json.dumps(numbered, ensure_ascii=False, indent=2)
 
 
 def _build_prompt(
@@ -212,11 +212,11 @@ def _build_prompt(
     if empty_cells is None or placeholder_cells is None:
         empty_cells, placeholder_cells = _compute_cell_sets(mappings)
 
-    f2_text,  _ = _number_records(f2_knowledge,    "F2")
-    f3o_text, _ = _number_records(f3_own,          "F3own")
-    f3a_text, _ = _number_records(f3_all,          "F3all")
-    sim_text, _ = _number_records(similar_work,    "SIM")
-    sup_text, _ = _number_records(supplement_info, "SUP")
+    f2_text  = _number_records(f2_knowledge,    "F2")
+    f3o_text = _number_records(f3_own,          "F3own")
+    f3a_text = _number_records(f3_all,          "F3all")
+    sim_text = _number_records(similar_work,    "SIM")
+    sup_text = _number_records(supplement_info, "SUP")
 
     mappings_text  = json.dumps(mappings,   ensure_ascii=False, indent=2)
     plan_diff_text = (

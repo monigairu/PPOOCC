@@ -271,8 +271,7 @@ def _extract_from_file(
     UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
     if suffix not in SUPPORTED_EXTENSIONS:
         raise ValueError(f"未対応のファイル形式です: {suffix}")
-    safe_suffix = Path(suffix).name
-    temp_path = UPLOAD_DIR / f"{uuid.uuid4().hex}{safe_suffix}"
+    temp_path = UPLOAD_DIR / f"{uuid.uuid4().hex}{suffix}"
 
     try:
         with open(temp_path, "wb") as f:

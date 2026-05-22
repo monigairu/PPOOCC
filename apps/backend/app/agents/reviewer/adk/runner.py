@@ -42,32 +42,6 @@ logger = logging.getLogger(__name__)
 _session_service = InMemorySessionService()
 _APP_NAME = "nuro_reviewer"
 
-# ── プレースホルダーノード（Step 2 用） ────────────────────────────────────────
-# Step 3 で agents.py の実装に差し替える
-
-async def _placeholder_f2(ctx: Context) -> None:
-    ctx.state[K.F2_KNOWLEDGE] = []
-
-async def _placeholder_f3_own(ctx: Context) -> None:
-    ctx.state[K.F3_OWN] = []
-
-async def _placeholder_f3_all(ctx: Context) -> None:
-    ctx.state[K.F3_ALL] = []
-
-async def _placeholder_supplement(ctx: Context) -> None:
-    ctx.state[K.SUPPLEMENT_INFO] = []
-
-async def _placeholder_rule_check(ctx: Context) -> None:
-    ctx.state[K.PLAN_DIFFS]        = []
-    ctx.state[K.RULE_ITEMS]        = []
-    ctx.state[K.EMPTY_CELLS]       = []
-    ctx.state[K.PLACEHOLDER_CELLS] = {}
-
-async def _placeholder_synthesis(ctx: Context) -> None:
-    ctx.state[K.REVIEW_ITEMS]    = []
-    ctx.state[K.RETRIEVAL_TRACE] = []
-
-
 def _build_workflow(
     f2_func=f2_knowledge_node,
     f3_own_func=f3_own_knowledge_node,

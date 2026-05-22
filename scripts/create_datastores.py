@@ -5,12 +5,15 @@ Vertex AI Search データストア作成スクリプト（一度だけ実行）
     uv run python scripts/create_datastores.py
 
 作成されるデータストア:
-    nuro-f2-knowledge  ... F2ナレッジ（NuRO内有の知見）
-    nuro-f3-knowledge  ... F3ナレッジ（電力別の問合せ履歴）
+    nuro-f2-knowledge         ... F2ナレッジ（NuRO内有の知見）
+    nuro-f3-knowledge         ... F3ナレッジ（電力別の問合せ履歴）
+    nuro-supplement-knowledge ... 補足資料キャプション（Phase 3）
 
 完了後、出力されたデータストアIDを .env に追記してください:
     VERTEX_SEARCH_F2_DATASTORE_ID=nuro-f2-knowledge
     VERTEX_SEARCH_F3_DATASTORE_ID=nuro-f3-knowledge
+    VERTEX_SEARCH_SUPPLEMENT_DATASTORE_ID=nuro-supplement-knowledge
+    VERTEX_SEARCH_SUPPLEMENT_ENGINE_ID=nuro-supplement-engine
 """
 import sys
 import time
@@ -34,6 +37,11 @@ _DATASTORES = [
         "datastore_id": "nuro-f3-knowledge",
         "display_name": "NuRO F3 Knowledge (電力別問合せ履歴)",
         "env_key": "VERTEX_SEARCH_F3_DATASTORE_ID",
+    },
+    {
+        "datastore_id": "nuro-supplement-knowledge",
+        "display_name": "NuRO Supplement Knowledge (補足資料キャプション)",
+        "env_key": "VERTEX_SEARCH_SUPPLEMENT_DATASTORE_ID",
     },
 ]
 

@@ -9,7 +9,6 @@ JSON データを入力として、Excel テンプレートに値を転記し、
   generate_form_from_dict()   API用（辞書データを受け取り、マッピング情報を返す）
 """
 import json
-import re
 from pathlib import Path
 
 from apps.backend.app.agents.cell_locator.cell_locator_agent import determine_cell_mapping
@@ -285,53 +284,24 @@ def _determine_mapping_with_reasoning(
     frame_name: str,
 ) -> tuple[dict, dict]:
     """
-    AIによるセルマッピング判定を実行し、mappings と reasoning を返す。
+    セルマッピングを取得し、reasoning も合わせて返す。
 
-    generate_form_from_dict() の内部ヘルパー。
+    固定フィールドは YAML から決定論的に解決するため LLM 不使用。
+    YAML未定義フィールドのみ cell_locator_agent 経由で LLM にフォールバック。
     """
-    from apps.backend.app.core.excel_scanner import scan_label_cells
-    from apps.backend.app.core.skill_loader import load_skill, render_skill
-    from apps.backend.app.core.ai_client import call_gemini
+    mappings = determine_cell_mapping(input_data, workbook, sheet_name, frame_name)
 
     try:
         config = load_frame_config(frame_name, sheet_name)
         yaml_cell_defs = extract_cell_definitions(config)
-        field_aliases = config.get("field_aliases", {})
     except FileNotFoundError:
         yaml_cell_defs = {}
-        field_aliases = {}
 
-    label_map = scan_label_cells(workbook, sheet_name)
+    reasoning: dict[str, str] = {}
+    for key, cells in mappings.items():
+        if key in yaml_cell_defs:
+            reasoning[key] = f"YAML定義（frames/{frame_name}/{sheet_name}.yaml）による確定マッピング"
+        else:
+            reasoning[key] = "AI判定によるマッピング"
 
-    skill_dir = Path("apps/backend/app/agents/cell_locator")
-    skill_text = load_skill(skill_dir)
-    prompt = render_skill(
-        skill_text,
-        json_data=json.dumps(input_data, ensure_ascii=False, indent=2),
-        label_map=json.dumps(label_map, ensure_ascii=False, indent=2),
-        yaml_cell_defs=json.dumps(yaml_cell_defs, ensure_ascii=False, indent=2),
-        field_aliases=json.dumps(field_aliases, ensure_ascii=False, indent=2),
-    )
-
-    response_text = call_gemini(prompt)
-
-    match = re.search(r"```(?:json)?\s*(.*?)\s*```", response_text, re.DOTALL)
-    if match:
-        cleaned = match.group(1).strip()
-    else:
-        match2 = re.search(r"\{.*\}", response_text, re.DOTALL)
-        cleaned = match2.group(0).strip() if match2 else response_text.strip()
-
-    try:
-        result = json.loads(cleaned)
-        mappings = result.get("mappings", {})
-        reasoning = result.get("reasoning", {})
-        normalized = {
-            k: v if isinstance(v, list) else [v]
-            for k, v in mappings.items()
-        }
-        return normalized, reasoning
-    except Exception:
-        mappings = determine_cell_mapping(input_data, workbook, sheet_name, frame_name)
-        reasoning = {k: "根拠取得に失敗しました" for k in mappings}
-        return mappings, reasoning
+    return mappings, reasoning

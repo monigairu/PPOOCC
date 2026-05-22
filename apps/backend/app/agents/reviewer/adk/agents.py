@@ -28,11 +28,10 @@ Phase 3 追加時：
 from __future__ import annotations
 
 import asyncio
+import functools
 import logging
 
 from google.adk.agents import Context
-
-import functools
 
 from apps.backend.app.agents.reviewer import knowledge_loader
 from apps.backend.app.agents.reviewer.adk import state_keys as K
@@ -147,6 +146,8 @@ async def similar_work_node(ctx: Context) -> None:
         logger.exception("Tool3(類似工事) 検索エラー")
         result = []
 
+    # result は Phase2 現在データ未入手のためスタブが空リストを返す。
+    # state への書き込みは K.SIMILAR_WORK キー追加時（Phase3）に合わせて行う。
     ctx.state[K.TRACE_SIMILAR] = {
         "tool": "Tool3（類似工事データ）",
         "query": fee_type or "（クエリなし）",
