@@ -9,6 +9,7 @@ JSON データを入力として、Excel テンプレートに値を転記し、
   generate_form_from_dict()   API用（辞書データを受け取り、マッピング情報を返す）
 """
 import json
+import logging
 from pathlib import Path
 
 from apps.backend.app.agents.cell_locator.cell_locator_agent import determine_cell_mapping
@@ -25,7 +26,10 @@ from apps.backend.app.core.excel_io import (
 )
 from apps.backend.app.core.frame_config_loader import load_frame_config, extract_cell_definitions
 from apps.backend.app.core.settings import CACHE_DIR
+from apps.backend.app.core.unit_converter import convert_unit
 from apps.backend.app.section_handlers.tabular_handler import write_tabular_section
+
+logger = logging.getLogger(__name__)
 
 
 def run_form_generation(
@@ -201,18 +205,46 @@ def generate_form_from_dict(
             reasoning_map = {key: "前回のAI判定結果を使用" for key in mappings_raw}
 
         # 4. 通常フィールドの書き込み
+        # extraction_schema から writable / unit を取得（なければデフォルト）
+        try:
+            frame_config = load_frame_config(frame_name, sheet_name)
+            extraction_schema = frame_config.get("extraction_schema", {})
+        except FileNotFoundError:
+            extraction_schema = {}
+
+        skipped_cells: list[str] = []
+
         for key, value in input_data.items():
             if isinstance(value, list):
+                continue
+
+            # writable: false のフィールドはスキップ
+            field_schema = extraction_schema.get(key, {})
+            if not field_schema.get("writable", True):
+                skipped_cells.append(key)
+                logger.debug(f"[generate_form] {key} は writable:false のためスキップ")
                 continue
 
             cell_addresses = mappings_raw.get(key, [])
             if isinstance(cell_addresses, str):
                 cell_addresses = [cell_addresses]
 
+            # 書き込み直前の単位変換（unit: 千円 など）
+            target_unit = field_schema.get("unit")
+            write_value = value
+            if target_unit and target_unit != "円":
+                converted = convert_unit(value, from_unit="円", to_unit=target_unit)
+                if converted is None:
+                    logger.warning(
+                        f"[unit_converter] {key} の単位変換に失敗しました。元の値: {value}"
+                    )
+                    continue
+                write_value = converted
+
             for cell_address in cell_addresses:
                 if cell_address == "不明":
                     continue
-                success = write_to_cell(workbook, sheet_name, cell_address, value)
+                success = write_to_cell(workbook, sheet_name, cell_address, write_value)
                 if success:
                     base_reasoning = reasoning_map.get(key, "根拠情報なし")
                     field_meta = source_metadata.get(key, {})
@@ -227,7 +259,7 @@ def generate_form_from_dict(
                     all_cell_mappings.append({
                         "field_name": key,
                         "cell_address": cell_address,
-                        "value": str(value),
+                        "value": str(write_value),
                         "reasoning": reasoning,
                     })
 
@@ -239,7 +271,7 @@ def generate_form_from_dict(
                     continue
 
                 print(f"   表形式セクション '{section['name']}' を書き込み中")
-                write_tabular_section(workbook, sheet_name, section, input_data)
+                write_tabular_section(workbook, sheet_name, section, input_data, max_rows=200)
 
                 # 書き込んだ表形式セルをマッピングに追加（ハイライト・チャット連動）
                 json_key = section.get("json_key", "")

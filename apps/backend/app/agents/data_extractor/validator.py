@@ -139,11 +139,15 @@ def validate_and_finalize(
         "extraction_rate": f"{extracted_count}/{total} ({extracted_count/total*100:.0f}%)",
     }
 
-    return {
+    result = {
         "data": validated_data,
         "_metadata": validated_metadata,
         "_validation": validation_summary,
     }
+    # formula_specs は型チェックなしで素通し（Phase 3 拡張）
+    if "formula_specs" in mapper_result:
+        result["formula_specs"] = mapper_result["formula_specs"]
+    return result
 
 
 def _validate_string(

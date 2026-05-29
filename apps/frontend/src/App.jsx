@@ -255,16 +255,23 @@ function SessionHistorySidebar({ sessions, selectedSessionId, onSelect, onNewCli
   );
 }
 
-// ── アップロードゾーン ─────────────────────────
-function UploadZone({ onFileSelect, file, isLoading }) {
+// ── アップロードゾーン（複数ファイル対応） ────
+function UploadZone({ onFilesSelect, files, isLoading }) {
   const inputRef = useRef(null);
   const [isDragOver, setIsDragOver] = useState(false);
 
   const handleDrop = (e) => {
     e.preventDefault();
     setIsDragOver(false);
-    const f = e.dataTransfer.files[0];
-    if (f) onFileSelect(f);
+    const dropped = Array.from(e.dataTransfer.files);
+    if (dropped.length > 0) onFilesSelect(dropped);
+  };
+
+  const handleChange = (e) => {
+    const selected = Array.from(e.target.files);
+    if (selected.length > 0) onFilesSelect(selected);
+    // 同じファイルを再選択できるようリセット
+    e.target.value = "";
   };
 
   return (
@@ -289,33 +296,42 @@ function UploadZone({ onFileSelect, file, isLoading }) {
           資料ファイルをドロップ<br />またはクリックして選択
         </div>
         <div style={{ fontSize: "10px", color: COLORS.textDim, marginTop: "4px" }}>
-          対応形式: .xlsx / .docx / .json
+          複数ファイル可 | .xlsx / .xls / .docx / .pdf
         </div>
         <input
           ref={inputRef}
           type="file"
-          accept=".json,.xlsx,.xls,.docx"
+          accept=".xlsx,.xls,.docx,.pdf"
+          multiple
           style={{ display: "none" }}
-          onChange={(e) => e.target.files[0] && onFileSelect(e.target.files[0])}
+          onChange={handleChange}
         />
       </div>
 
-      {file && (
-        <div style={{
-          padding: "10px 12px",
-          borderRadius: "6px",
-          background: COLORS.successSoft,
-          border: `1px solid ${COLORS.success}`,
-          fontSize: "12px",
-          color: COLORS.success,
-          display: "flex",
-          alignItems: "center",
-          gap: "8px",
-        }}>
-          <span>✓</span>
-          <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-            {file.name}
-          </span>
+      {files.length > 0 && (
+        <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
+          {files.map((f, i) => (
+            <div key={i} style={{
+              padding: "7px 10px",
+              borderRadius: "5px",
+              background: COLORS.successSoft,
+              border: `1px solid ${COLORS.success}`,
+              fontSize: "11px",
+              color: COLORS.success,
+              display: "flex",
+              alignItems: "center",
+              gap: "6px",
+            }}>
+              <span>✓</span>
+              <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", flex: 1 }}>
+                {f.name}
+              </span>
+              <button
+                onClick={(e) => { e.stopPropagation(); onFilesSelect(files.filter((_, j) => j !== i)); }}
+                style={{ background: "none", border: "none", color: COLORS.success, cursor: "pointer", fontSize: "12px", padding: "0 2px", opacity: 0.7 }}
+              >×</button>
+            </div>
+          ))}
         </div>
       )}
 
@@ -345,16 +361,19 @@ function UploadZone({ onFileSelect, file, isLoading }) {
         color: COLORS.textDim,
         lineHeight: 1.7,
       }}>
-        アップロード後、AIが各フィールドを
-        適切なセルに自動マッピングします。
-        根拠はチャットで確認できます。
+        複数ファイルを同時にアップロードできます。<br />
+        AIが各資料からフィールドを抽出・統合し MRC1 に転記します。
       </div>
     </div>
   );
 }
 
 // ── 実行ボタン ────────────────────────────────
-function RunButton({ onClick, isLoading, disabled }) {
+function RunButton({ onClick, isLoading, disabled, progress }) {
+  const label = isLoading
+    ? progress > 0 ? `処理中... ${progress}%` : "AI転記実行中..."
+    : "▶  様式の作成を開始";
+
   return (
     <div style={{ padding: "16px", borderTop: `1px solid ${COLORS.border}` }}>
       <button
@@ -379,16 +398,19 @@ function RunButton({ onClick, isLoading, disabled }) {
           justifyContent: "center",
           gap: "8px",
           fontFamily: "inherit",
+          position: "relative",
+          overflow: "hidden",
         }}
       >
-        {isLoading ? (
-          <>
-            <Spinner />
-            AI転記実行中...
-          </>
-        ) : (
-          "▶  様式の作成を開始"
+        {isLoading && progress > 0 && (
+          <div style={{
+            position: "absolute", left: 0, top: 0, bottom: 0,
+            width: `${progress}%`,
+            background: "rgba(255,255,255,0.12)",
+            transition: "width 0.5s",
+          }} />
         )}
+        {isLoading ? <><Spinner />{label}</> : label}
       </button>
     </div>
   );
@@ -620,11 +642,11 @@ function ExcelGridView({ mappings, onCellClick, selectedCell, template, template
 }
 
 // ── チャットパネル ─────────────────────────────
-function ChatPanel({ selectedCell, sessionId }) {
+function ChatPanel({ selectedCell, sessionId, frameName, onCellEdit }) {
   const [messages, setMessages] = useState([
     {
       role: "ai",
-      text: "様式自動作成AIです。\n転記結果テーブルの行をクリックすると、そのセルについて質問できます。",
+      text: "様式自動作成AIです。\n転記結果テーブルの行をクリックすると、そのセルについて質問したり、値の変更を依頼できます。",
     },
   ]);
   const [input, setInput] = useState("");
@@ -637,7 +659,7 @@ function ChatPanel({ selectedCell, sessionId }) {
       ...prev,
       {
         role: "ai",
-        text: `「${selectedCell.field_name}」（${selectedCell.cell_address}）が選択されました。\n\n転記した値: **${selectedCell.value}**\n\nこのセルについて何か質問はありますか？`,
+        text: `「${selectedCell.field_name}」（${selectedCell.cell_address}）が選択されました。\n\n転記した値: **${selectedCell.value}**\n\nこのセルについて質問したり、値の変更を依頼できます。`,
       },
     ]);
   }, [selectedCell]);
@@ -659,15 +681,28 @@ function ChatPanel({ selectedCell, sessionId }) {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
+          session_id: sessionId || "",
           message: userMessage,
           cell_address: selectedCell.cell_address,
           field_name: selectedCell.field_name,
           field_value: selectedCell.value,
           reasoning: selectedCell.reasoning,
+          frame_name: frameName || "frameB",
+          sheet_name: "MRC1",
         }),
       });
       const data = await res.json();
-      setMessages((prev) => [...prev, { role: "ai", text: data.answer }]);
+
+      // 編集成功時: テーブルを楽観的更新してバッジ付きメッセージを表示
+      if (data.type === "edited" && data.edited_cells?.length > 0) {
+        onCellEdit?.(data.edited_cells);
+        setMessages((prev) => [
+          ...prev,
+          { role: "ai", text: data.answer, type: "edited" },
+        ]);
+      } else {
+        setMessages((prev) => [...prev, { role: "ai", text: data.answer }]);
+      }
     } catch {
       setMessages((prev) => [...prev, { role: "ai", text: "エラーが発生しました。バックエンドが起動しているか確認してください。" }]);
     } finally {
@@ -724,15 +759,34 @@ function ChatPanel({ selectedCell, sessionId }) {
               maxWidth: "80%",
               padding: "10px 13px",
               borderRadius: m.role === "user" ? "12px 4px 12px 12px" : "4px 12px 12px 12px",
-              background: m.role === "user" ? COLORS.userBubble : COLORS.aiBubble,
-              border: `1px solid ${m.role === "user" ? "#2a4a7f" : COLORS.border}`,
+              background: m.role === "user" ? COLORS.userBubble
+                : m.type === "edited" ? "rgba(52,211,153,0.08)"
+                : COLORS.aiBubble,
+              border: `1px solid ${m.role === "user" ? "#2a4a7f"
+                : m.type === "edited" ? "rgba(52,211,153,0.4)"
+                : COLORS.border}`,
               fontSize: "13px",
               lineHeight: 1.7,
               color: COLORS.text,
               whiteSpace: "pre-wrap",
               wordBreak: "break-word",
             }}>
-              {m.text}
+              {m.type === "edited" && (
+                <span style={{
+                  display: "inline-block",
+                  marginBottom: "4px",
+                  padding: "1px 7px",
+                  borderRadius: "3px",
+                  background: COLORS.success,
+                  color: "#0a1a12",
+                  fontSize: "10px",
+                  fontWeight: 700,
+                  letterSpacing: "0.05em",
+                }}>
+                  変更完了
+                </span>
+              )}
+              {m.type === "edited" && "\n"}{m.text}
             </div>
           </div>
         ))}
@@ -766,7 +820,7 @@ function ChatPanel({ selectedCell, sessionId }) {
           value={input}
           onChange={(e) => setInput(e.target.value)}
           onKeyDown={(e) => e.key === "Enter" && !e.shiftKey && handleSend()}
-          placeholder={selectedCell ? "このセルについて質問する..." : "左のテーブルから行を選択してください"}
+          placeholder={selectedCell ? "質問や変更指示を入力（例: 電力会社を中部電力に変えて）" : "左のテーブルから行を選択してください"}
           disabled={!selectedCell || isLoading}
           style={{
             flex: 1,
@@ -806,9 +860,13 @@ function ChatPanel({ selectedCell, sessionId }) {
 // ── メインアプリ ───────────────────────────────
 export default function App() {
   // 転記結果
-  const [file, setFile]             = useState(null);
+  const [files, setFiles]           = useState([]);
   const [isLoading, setIsLoading]   = useState(false);
+  const [progress, setProgress]     = useState(0);
+  const [jobId, setJobId]           = useState(null);
   const [mappings, setMappings]     = useState([]);
+  const [conflicts, setConflicts]   = useState([]);
+  const [skippedCells, setSkippedCells] = useState([]);
   const [sessionId, setSessionId]   = useState(null);
   const [frameName, setFrameName]   = useState("frameB");
   const [selectedCell, setSelectedCell] = useState(null);
@@ -880,12 +938,16 @@ export default function App() {
     setLeftMode("upload");
     setSelectedSession(null);
     setMappings([]);
+    setConflicts([]);
+    setSkippedCells([]);
     setSessionId(null);
+    setJobId(null);
     setSelectedCell(null);
     setStatusMessage("");
     setError("");
     setResultTemplate(null);
-    setFile(null);
+    setFiles([]);
+    setProgress(0);
   };
 
   // 履歴モードに戻る
@@ -894,55 +956,94 @@ export default function App() {
     fetchSessions();
   };
 
-  // 新規転記実行
+  // 新規転記実行（N対1・非同期ジョブ方式）
   const handleRun = async () => {
-    if (!file) return;
+    if (files.length === 0) return;
     setIsLoading(true);
     setError("");
     setMappings([]);
+    setConflicts([]);
+    setSkippedCells([]);
     setSelectedCell(null);
-    setStatusMessage("AIが転記中...");
+    setProgress(0);
+    setStatusMessage(`${files.length} 件のファイルを送信中...`);
 
     try {
+      // ── STEP 1: ジョブを登録して job_id を取得 ──
       const formData = new FormData();
-      formData.append("file", file);
-      formData.append("sheet_name", "MRC1");
-      formData.append("frame_name", "frameB");
+      files.forEach((f) => formData.append("files", f));
+      formData.append("sheet", "MRC1");
+      formData.append("frame", "frameB");
 
-      const res = await fetch(`${API_BASE}/upload`, {
+      const res = await fetch(`${API_BASE}/transcribe/mrc1`, {
         method: "POST",
         body: formData,
       });
 
       if (!res.ok) {
         const err = await res.json();
-        throw new Error(err.detail || "転記に失敗しました");
+        throw new Error(err.detail || "転記ジョブの登録に失敗しました");
       }
 
-      const data = await res.json();
-      setMappings(data.mappings);
-      setSessionId(data.session_id);
-      const fn = data.frame_name || "frameB";
-      setFrameName(fn);
-      setStatusMessage(data.message);
-      setSelectedSession(null);
+      const { job_id } = await res.json();
+      setJobId(job_id);
+      setStatusMessage("AIが転記中（複数ファイル処理中）...");
 
-      fetch(`${API_BASE}/result-layout/${data.session_id}?frame_name=${fn}&sheet_name=MRC1`)
-        .then((r) => r.ok ? r.json() : null)
-        .then((layout) => { if (layout) setResultTemplate(layout); })
-        .catch(() => {});
+      // ── STEP 2: ポーリング（2秒間隔・最大120秒）──
+      const POLL_INTERVAL = 2000;
+      const TIMEOUT = 120_000;
+      const startTime = Date.now();
+
+      await new Promise((resolve, reject) => {
+        const poll = async () => {
+          if (Date.now() - startTime > TIMEOUT) {
+            reject(new Error("タイムアウト: 転記処理が120秒以内に完了しませんでした"));
+            return;
+          }
+
+          const statusRes = await fetch(`${API_BASE}/jobs/${job_id}`);
+          if (!statusRes.ok) { reject(new Error("ジョブ状態の取得に失敗しました")); return; }
+
+          const job = await statusRes.json();
+          setProgress(job.progress ?? 0);
+
+          if (job.status === "completed") {
+            const result = job.result;
+            setMappings(result.cell_mappings || []);
+            setConflicts(result.conflicts || []);
+            setSkippedCells(result.skipped_cells || []);
+            setJobId(job_id);
+            setSelectedSession(null);
+            setStatusMessage(`転記完了（${files.length} ファイル）`);
+            resolve();
+          } else if (job.status === "failed") {
+            reject(new Error(job.error || "転記処理が失敗しました"));
+          } else {
+            setTimeout(poll, POLL_INTERVAL);
+          }
+        };
+        poll();
+      });
+
     } catch (e) {
       setError(e.message);
       setStatusMessage("");
     } finally {
       setIsLoading(false);
+      setProgress(0);
     }
   };
 
-  // ヘッダー右スロット: レビュー完了セッション or 新規転記完了時にダウンロードリンクを表示
+  // ヘッダー右スロット: ダウンロードリンクを表示
   const isCompleted = selectedSession?.review_status === "completed";
-  const showDownload = sessionId && (leftMode === "upload" || isCompleted);
-  const headerRight = showDownload
+  const showSessionDownload = sessionId && leftMode === "history" && isCompleted;
+  const showJobDownload = jobId && leftMode === "upload" && mappings.length > 0;
+  const headerRight = showJobDownload
+    ? <a href={`${API_BASE}/download-job/${jobId}`}
+         style={{ color: COLORS.accent, textDecoration: "none", fontSize: "12px" }}>
+        ⬇ Excelをダウンロード
+      </a>
+    : showSessionDownload
     ? <a href={`${API_BASE}/download/${sessionId}?frame_name=${frameName}`}
          style={{ color: COLORS.accent, textDecoration: "none", fontSize: "12px" }}>
         ⬇ Excelをダウンロード
@@ -1002,8 +1103,8 @@ export default function App() {
                   新規転記
                 </span>
               </div>
-              <UploadZone onFileSelect={setFile} file={file} isLoading={isLoading} />
-              <RunButton onClick={handleRun} isLoading={isLoading} disabled={!file} />
+              <UploadZone onFilesSelect={setFiles} files={files} isLoading={isLoading} />
+              <RunButton onClick={handleRun} isLoading={isLoading} disabled={files.length === 0} progress={progress} />
             </>
           )}
         </div>
@@ -1056,6 +1157,30 @@ export default function App() {
               </span>
             )}
           </div>
+          {/* 競合・スキップ情報バナー */}
+          {(conflicts.length > 0 || skippedCells.length > 0) && (
+            <div style={{ padding: "8px 16px", display: "flex", gap: "10px", flexWrap: "wrap", borderBottom: `1px solid ${COLORS.border}`, background: "rgba(0,0,0,0.2)" }}>
+              {conflicts.length > 0 && (
+                <div style={{
+                  padding: "5px 12px", borderRadius: "5px", fontSize: "11px",
+                  background: COLORS.warningSoft, border: `1px solid ${COLORS.warning}`,
+                  color: COLORS.warning, fontWeight: 600,
+                }}>
+                  ⚠ 競合 {conflicts.length} 件（複数ファイルで値が異なるフィールドがあります）
+                </div>
+              )}
+              {skippedCells.length > 0 && (
+                <div style={{
+                  padding: "5px 12px", borderRadius: "5px", fontSize: "11px",
+                  background: "rgba(148,163,184,0.1)", border: `1px solid ${COLORS.borderLight}`,
+                  color: COLORS.textMuted,
+                }}>
+                  数式セルのためスキップ: {skippedCells.join(", ")}
+                </div>
+              )}
+            </div>
+          )}
+
           {viewMode === "table" ? (
             <MappingTable
               mappings={mappings}
@@ -1075,8 +1200,18 @@ export default function App() {
 
         {/* ── 右パネル: チャット ── */}
         <div style={styles.rightPanel}>
-          <div style={styles.panelHeader}>AIチャット — 根拠説明</div>
-          <ChatPanel selectedCell={selectedCell} sessionId={sessionId} />
+          <div style={styles.panelHeader}>AIチャット — 質問・編集</div>
+          <ChatPanel
+            selectedCell={selectedCell}
+            sessionId={sessionId}
+            frameName={frameName}
+            onCellEdit={(editedCells) => {
+              setMappings((prev) => prev.map((m) => {
+                const edited = editedCells.find((e) => e.field_name === m.field_name);
+                return edited ? { ...m, value: edited.new_value } : m;
+              }));
+            }}
+          />
         </div>
       </div>
     </div>

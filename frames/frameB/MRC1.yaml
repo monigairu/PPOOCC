@@ -78,11 +78,11 @@ sections:
       - {name: 計画_員数,       column: G}
       - {name: 計画_解体物量,   column: H}
       - {name: 計画_工数,       column: I}
-      - {name: 計画_費用,       column: J}
+      - {name: 計画_費用,       column: J, unit: 千円}
       - {name: 実績_員数,       column: K}
       - {name: 実績_解体物量,   column: L}
       - {name: 実績_工数,       column: M}
-      - {name: 実績_費用,       column: N}
+      - {name: 実績_費用,       column: N, unit: 千円}
 
 # ─────────────────────────────────────────────
 # data_extractor_agent が参照する抽出スキーマ定義
@@ -207,6 +207,7 @@ extraction_schema:
     type: number
     required: true
     unit: 千円
+    writable: false        # =SUM('MRC2'!...) の数式セル（plan: G18, actual: K18）
     description: "当該年度の工事総額（千円単位）"
     synonyms: [総額, 契約金額, 請負金額, 合計金額, 受注金額, お見積金額, 見積金額]
     tax_note: "税込/税抜を別途確認要"
@@ -215,6 +216,7 @@ extraction_schema:
     type: number
     required: false
     unit: 千円
+    writable: false        # TODO: 要確認（plan: G19, actual: K19）
     description: "工事全体の支払い対象総額（千円単位）"
     synonyms: [全体支払い対象金額, 全体金額, 支払い対象金額, 工事全体金額]
 

@@ -10,17 +10,44 @@ from pydantic import BaseModel
 # ── チャット関連 ──────────────────────────────
 
 class ChatRequest(BaseModel):
-    """チャットのリクエスト"""
-    message: str           # ユーザーのメッセージ
-    cell_address: str      # 質問対象のセル番地（例: "C7"）
-    field_name: str        # フィールド名（例: "炉型"）
-    field_value: str       # セルの値（例: "PWR"）
-    reasoning: str         # AIが転記時に出した根拠
+    """統合チャットのリクエスト（Q&A + セル編集を一本化）"""
+    session_id: str                  # 編集操作に必要なセッション ID
+    message: str                     # ユーザーのメッセージ
+    cell_address: str = ""           # 選択中のセル番地（Q&A コンテキスト用）
+    field_name: str = ""             # 選択中のフィールド名
+    field_value: str = ""            # 選択中のセルの現在値
+    reasoning: str = ""              # 転記時の根拠
+    sheet_name: str = "MRC1"
+    frame_name: str = "frameB"
 
 
 class ChatResponse(BaseModel):
-    """チャットのレスポンス"""
-    answer: str            # AIの回答
+    """統合チャットのレスポンス"""
+    type: str                                    # "answer" | "edited" | "ambiguous"
+    answer: str                                  # 常に自然言語メッセージを含む
+    edited_cells: list["EditedCell"] | None = None  # type=="edited" 時のみ
+
+
+class ChatEditRequest(BaseModel):
+    """セル編集チャットのリクエスト"""
+    session_id: str                  # 編集対象のセッション ID
+    message: str                     # ユーザーの自然言語による編集指示
+    sheet_name: str = "MRC1"
+    frame_name: str = "frameB"
+
+
+class EditedCell(BaseModel):
+    """1フィールド分の編集結果"""
+    field_name: str                  # 変更したフィールド名
+    cell_addresses: list[str]        # 書き込んだセル番地のリスト（複数の場合あり）
+    new_value: str                   # 書き込んだ値
+
+
+class ChatEditResponse(BaseModel):
+    """セル編集チャットのレスポンス"""
+    status: str                              # "edited" | "ambiguous" | "not_edit" | "field_not_found"
+    message: str                             # ユーザー向けの自然言語メッセージ
+    edited_cells: list[EditedCell] | None = None  # 編集したセル情報（status=="edited" 時）
 
 
 # ── 転記結果関連 ──────────────────────────────
