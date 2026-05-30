@@ -56,4 +56,9 @@ def call_gemini_structured(
         contents=prompt,
         config=config,
     )
+    if response.text is None:
+        finish = getattr(getattr(response, "candidates", [None])[0], "finish_reason", None)
+        raise RuntimeError(
+            f"Gemini structured call returned empty text (model={model_name}, finish_reason={finish})"
+        )
     return json.loads(response.text.strip())

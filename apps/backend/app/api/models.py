@@ -28,26 +28,11 @@ class ChatResponse(BaseModel):
     edited_cells: list["EditedCell"] | None = None  # type=="edited" 時のみ
 
 
-class ChatEditRequest(BaseModel):
-    """セル編集チャットのリクエスト"""
-    session_id: str                  # 編集対象のセッション ID
-    message: str                     # ユーザーの自然言語による編集指示
-    sheet_name: str = "MRC1"
-    frame_name: str = "frameB"
-
-
 class EditedCell(BaseModel):
     """1フィールド分の編集結果"""
     field_name: str                  # 変更したフィールド名
     cell_addresses: list[str]        # 書き込んだセル番地のリスト（複数の場合あり）
     new_value: str                   # 書き込んだ値
-
-
-class ChatEditResponse(BaseModel):
-    """セル編集チャットのレスポンス"""
-    status: str                              # "edited" | "ambiguous" | "not_edit" | "field_not_found"
-    message: str                             # ユーザー向けの自然言語メッセージ
-    edited_cells: list[EditedCell] | None = None  # 編集したセル情報（status=="edited" 時）
 
 
 # ── 転記結果関連 ──────────────────────────────

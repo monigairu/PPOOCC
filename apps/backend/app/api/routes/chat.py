@@ -1,8 +1,7 @@
 """
 チャット関連エンドポイント
 
-POST /api/chat       - セルの根拠についてAIに質問する（説明・Q&A）
-POST /api/chat_edit  - 自然言語でセルの値を変更する（編集）
+POST /api/chat - Q&A・編集指示・曖昧応答を統合処理する
 """
 import logging
 
@@ -12,11 +11,8 @@ from google.cloud import firestore
 from apps.backend.app.agents.chat_editor.chat_editor_agent import (
     apply_cell_edit,
     handle_unified_chat,
-    parse_edit_intent,
 )
 from apps.backend.app.api.models import (
-    ChatEditRequest,
-    ChatEditResponse,
     ChatRequest,
     ChatResponse,
     EditedCell,
@@ -116,103 +112,6 @@ async def chat(request: ChatRequest):
     return ChatResponse(
         type="edited",
         answer=f"「{result.field}」を「{result.new_value}」に変更しました（セル: {cells_str}）",
-        edited_cells=[
-            EditedCell(
-                field_name=edit_result.field_name,
-                cell_addresses=edit_result.cell_addresses,
-                new_value=edit_result.new_value,
-            )
-        ],
-    )
-
-
-@router.post("/chat_edit", response_model=ChatEditResponse)
-async def chat_edit(request: ChatEditRequest):
-    """
-    自然言語による編集指示を解釈し、Excel セルを書き換える。
-
-    LLM は「何を変えたいか」の意図解釈のみを担う。
-    セル番地の決定は YAML ルックアップで行う（決定論的）。
-    """
-    # 1. 編集可能フィールド一覧を YAML から取得
-    try:
-        config = load_frame_config(request.frame_name, request.sheet_name)
-        yaml_cell_defs = extract_cell_definitions(config)
-        available_fields = list(yaml_cell_defs.keys())
-    except FileNotFoundError:
-        raise HTTPException(
-            status_code=400,
-            detail=f"様式定義が見つかりません: frames/{request.frame_name}/{request.sheet_name}.yaml",
-        )
-
-    # 2. 意図解釈（LLM）
-    intent = parse_edit_intent(request.message, available_fields)
-
-    if intent.status == "not_edit":
-        return ChatEditResponse(
-            status="not_edit",
-            message=(
-                "編集指示ではないと判断しました。"
-                "セルの内容を変更するには「○○を△△に変えて」のようにお伝えください。"
-            ),
-        )
-
-    if intent.status == "ambiguous":
-        return ChatEditResponse(
-            status="ambiguous",
-            message=intent.clarification_question or "どのフィールドをどの値に変更しますか？",
-        )
-
-    # 3. フィールド存在確認（LLM が返したフィールド名が YAML にあるか）
-    if not intent.field or intent.field not in available_fields:
-        return ChatEditResponse(
-            status="field_not_found",
-            message=(
-                f"フィールド「{intent.field}」が見つかりません。"
-                f"変更できるフィールド: {', '.join(available_fields[:10])}..."
-            ),
-        )
-
-    if not intent.new_value:
-        return ChatEditResponse(
-            status="ambiguous",
-            message=f"「{intent.field}」をどの値に変更しますか？",
-        )
-
-    # 4. セル書き込み（YAML ルックアップ + Excel 更新）
-    try:
-        edit_result = apply_cell_edit(
-            session_id=request.session_id,
-            field_name=intent.field,
-            new_value=intent.new_value,
-            frame_name=request.frame_name,
-            sheet_name=request.sheet_name,
-        )
-    except FileNotFoundError as e:
-        raise HTTPException(status_code=404, detail=str(e))
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-    except Exception as e:
-        logger.exception("セル書き込みに失敗しました session_id=%s", request.session_id)
-        raise HTTPException(status_code=500, detail=f"セルの書き込みに失敗しました: {e}")
-
-    # 5. Firestore の mappings を更新
-    _update_firestore_mappings(
-        session_id=request.session_id,
-        field_name=intent.field,
-        new_value=intent.new_value,
-    )
-
-    # 6. GCS に再アップロード（失敗しても転記結果の返却は妨げない）
-    _reupload_excel_to_gcs(
-        session_id=request.session_id,
-        frame_name=request.frame_name,
-    )
-
-    cells_str = "、".join(edit_result.cell_addresses)
-    return ChatEditResponse(
-        status="edited",
-        message=f"「{intent.field}」を「{intent.new_value}」に変更しました（セル: {cells_str}）",
         edited_cells=[
             EditedCell(
                 field_name=edit_result.field_name,

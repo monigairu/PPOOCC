@@ -5,7 +5,6 @@
 
 公開関数:
   handle_unified_chat() → 意図判定 + Q&A応答 or 編集指示を1回のLLM呼び出しで処理
-  parse_edit_intent()   → 編集意図のみを解析（後方互換、/chat_edit 直接呼び出し用）
   apply_cell_edit()     → YAML ルックアップ + Excel 書き込み（決定論的）
 
 LLM の仕事は「何を変えたいか」の意図解釈のみ。
@@ -25,61 +24,11 @@ from apps.backend.app.core.skill_loader import load_skill, render_skill
 
 
 @dataclass
-class EditIntent:
-    """LLM が解析した編集意図。"""
-    status: str                          # "edit" | "ambiguous" | "not_edit"
-    field: str | None = None             # 変更対象フィールド名（status=="edit" 時）
-    new_value: str | None = None         # 新しい値（status=="edit" 時）
-    clarification_question: str | None = None  # 確認質問（status=="ambiguous" 時）
-    reason: str | None = None            # 非編集と判断した理由（status=="not_edit" 時）
-    confidence: float = 0.0
-
-
-@dataclass
 class EditResult:
     """セル書き込み結果。"""
     field_name: str
     cell_addresses: list[str] = field(default_factory=list)
     new_value: str = ""
-
-
-def parse_edit_intent(
-    user_message: str,
-    available_fields: list[str],
-) -> EditIntent:
-    """
-    ユーザーの発話から編集意図を構造化する（LLM使用）。
-
-    Args:
-        user_message: ユーザーの自然言語メッセージ
-        available_fields: 編集可能なフィールド名のリスト
-
-    Returns:
-        EditIntent（status / field / new_value を含む）
-    """
-    skill_dir = Path(__file__).parent
-    skill_text = load_skill(skill_dir)
-    prompt = render_skill(
-        skill_text,
-        user_message=user_message,
-        available_fields="\n".join(f"- {f}" for f in available_fields),
-    )
-
-    response_text = call_gemini(prompt)
-    cleaned = _extract_json(response_text)
-
-    try:
-        result = json.loads(cleaned)
-        return EditIntent(
-            status=result.get("status", "not_edit"),
-            field=result.get("field"),
-            new_value=result.get("new_value"),
-            clarification_question=result.get("clarification_question"),
-            reason=result.get("reason"),
-            confidence=float(result.get("confidence", 0.0)),
-        )
-    except (json.JSONDecodeError, ValueError):
-        return EditIntent(status="not_edit", reason="AI応答のパースに失敗しました")
 
 
 def apply_cell_edit(
@@ -176,7 +125,7 @@ def handle_unified_chat(
         UnifiedChatResult（type で Q&A / 編集 / 曖昧を区別）
     """
     skill_dir = Path(__file__).parent
-    skill_text = load_skill(skill_dir, skill_name="SKILL_unified.md")
+    skill_text = load_skill(skill_dir)
 
     has_source_info = "抽出元:" in reasoning
     reasoning_display = (
