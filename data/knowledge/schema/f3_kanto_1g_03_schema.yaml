@@ -1,7 +1,7 @@
-sheet_name: KNI_2G
-excel_file: F3_knowledge.xlsx
-excel_sheet: KNI_2G
-display_name: ナレッジ_03_電力別ナレッジ履歴_2G
+sheet_name: KNI_1G_03
+excel_file: F3_knowledge_関東電力.xlsx
+excel_sheet: KNI_1G_03
+display_name: ナレッジ_03_電力別ナレッジ履歴_1G/管理G_施行確認時
 frame: F3
 layout:
   title_row: 1
@@ -90,7 +90,7 @@ fixed_columns:
   col: Z
   dtype: string
   required: false
-  note: 'BWR / PWR（末尾Z列・QA列と非干渉）'
+  note: BWR / PWR（末尾Z列・QA列と非干渉）
 repeating_qa_columns:
   max_rounds: 6
   start_col: N
@@ -125,6 +125,6 @@ loader_config:
   encoding: utf-8
   engine: openpyxl
 output_model:
-  table_key: f3_kni_2g
+  table_key: f3_kni_1g_03_kanto
   primary_key: message_id
   flatten_qa: true

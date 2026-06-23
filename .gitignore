@@ -16,6 +16,9 @@ htmlcov/
 .env.*
 !.env.example
 
+# 検証レポート（verify_rag.py の生成物・一時ファイル）
+data/verification/
+
 # 画像ディレクトリ
 images/
 
@@ -46,3 +49,5 @@ data/source/
 data/extracted/
 # テンプレートをGit管理したい場合は次行を削除
 data/form_generation/input/templates/
+# 事前レビューのアノテーション生成物（再生成可能）
+data/review_eval/annotations/

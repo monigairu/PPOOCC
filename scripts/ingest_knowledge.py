@@ -38,6 +38,7 @@ from google.cloud import discoveryengine_v1 as discoveryengine
 from google.protobuf import struct_pb2
 
 from apps.backend.app.agents.reviewer._excel_reader import read_all_f2, read_all_f3
+from apps.backend.app.agents.reviewer.knowledge_loader import normalize_utility
 from apps.backend.app.core.settings import (
     GCP_LOCATION,
     GCP_PROJECT_ID,
@@ -77,9 +78,11 @@ def _build_document(
     #       message_content を struct_data にも格納する
     struct_fields: dict[str, Any] = {
         "knowledge_type":    knowledge_type.upper(),
-        "utility_name":      record.get("utility_name", ""),
+        # 会社名は正規化して保存（検索側 load_f3 と同じ正規化で表記ゆれ吸収）
+        "utility_name":      normalize_utility(record.get("utility_name", "")),
         "fee_type":          record.get("cost_category") or record.get("fee_type", ""),
         "sheet_name":        record.get("sheet_name", ""),
+        "reactor_type":      record.get("reactor_type", ""),  # 炉型フィルタ用（BWR/PWR）
         "message_direction": record.get("message_direction", ""),
         "message_content":   content_text,
         # 本番の権限制御用（NuROのみ参照可フラグ）

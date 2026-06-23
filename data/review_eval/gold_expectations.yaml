@@ -1,0 +1,136 @@
+# 事前レビュー ゴールド回帰：PoC検証マトリクス（難易度1〜4 × 2軸）
+#
+# 画像のPoC受け入れ基準に対応：
+#   軸① ナレッジ検索精度（retrieval_cases）
+#   軸② LLMが生成するレビュー品質（review_cases）
+# 文言一致でなく「性質」で判定するため、プロンプト微修正に強い。
+#
+# 運用：正解（NuROお手本）未確定の間は provisional: true（WARN止まり）。
+#   確定後に should_flag_any→must_flag へ、provisional: false にするとハードゲート（FAILでexit=1）。
+#   ケース追加・期待値変更は本YAML編集のみ（scripts/eval_review.py は不変）。
+
+version: "0.2-matrix-provisional"
+
+# ───────────────────────────────────────────────────────────────
+# 軸① ナレッジ検索精度
+#   tool : f3_all（他社/全社） / f3_own（自社） / f2
+#   query: 検索クエリ（費目・パラフレーズ）
+#   reactor_type / utility: 任意の絞り込み
+#   expect:
+#     min_hits      : 最低ヒット件数
+#     fee_any       : ヒットのいずれかが含むべき費目（部分一致）
+#     all_reactor   : 全ヒットが該当炉型であること（炉型フィルタ検証）
+# ───────────────────────────────────────────────────────────────
+retrieval_cases:
+  - name: 難1_費目完全一致でF3上位ヒット
+    difficulty: 1
+    provisional: true
+    tool: f3_all
+    query: "解体撤去費"
+    expect:
+      min_hits: 5
+      fee_any: ["解体撤去費"]
+
+  - name: 難2_表記ゆれ/パラフレーズでもヒット
+    difficulty: 2
+    provisional: true
+    tool: f3_all
+    query: "解体工事の費用 撤去"
+    expect:
+      min_hits: 3
+      fee_any: ["解体撤去費", "解体費", "施設解体費"]
+
+  - name: 難3_希少費目でもヒット（処分費）
+    difficulty: 3
+    provisional: true
+    tool: f3_all
+    query: "処分費 輸送容器"
+    expect:
+      min_hits: 1
+      fee_any: ["処分費"]
+
+  - name: 難3_希少炉型でヒット（PWRのみ返る）
+    difficulty: 3
+    provisional: true
+    tool: f3_all
+    query: "解体撤去費"
+    reactor_type: "PWR"
+    expect:
+      min_hits: 1
+      all_reactor: "PWR"
+
+# ───────────────────────────────────────────────────────────────
+# 軸② LLMレビュー品質
+#   excel/sheet 指定で run_review を実行（または synthetic_mappings で合成）。
+#   query（任意）: fee_type/reactor_type/utility をクエリ文脈として明示。
+#   expect:
+#     max_items / min_items     : 件数（過検出/見逃しガード）
+#     must_have_f3_grounded      : F3根拠の指摘が最低1件
+#     forbid_f3_grounded         : F3根拠の指摘を出してはならない（難4・非ハルシネーション）
+#     forbid_law_basis           : 法令/規制を根拠にしない
+#     should_flag_any / must_flag: 触れるべき観点
+# ───────────────────────────────────────────────────────────────
+review_cases:
+  - name: 難2/3_MRC1_ノイズ混在下で正しい指摘
+    difficulty: 3
+    provisional: true
+    excel: data/form_generation/output/転記結果_frameB_関東電力.xlsx
+    frame: frameB
+    sheet: MRC1
+    expect:
+      max_items: 7   # 暫定。F3根拠の指摘が増えたため実態に合わせ調整（NuRO確定時に再設定）
+      min_items: 1
+      must_have_f3_grounded: true
+      forbid_law_basis: true
+      should_flag_any: ["実施内容", "費用", "単価"]
+    # 廃炉業務を想定したゴールド指摘（仮説）。keywordsでAI出力との対応を自動マーキング（annotation用）。
+    # note: precision=AIが拾えるべき / recall=AIが見落としやすい（見逃し検証）
+    gold_findings:
+      - {id: G1, target: "実施内容 G22",         severity: "AIからの指摘", source: F3,      note: precision, keywords: ["対象設備", "特定", "系統", "機器名", "具体"]}
+      - {id: G2, target: "実施内容 G22",         severity: "要確認",       source: AI知見,  note: recall,    keywords: ["重複", "二重", "同じ記載"]}
+      - {id: G3, target: "解体機器表 費用 J30-J37", severity: "AIからの指摘", source: F3,      note: precision, keywords: ["単価", "内訳", "員数", "工数", "一式"]}
+      - {id: G4, target: "費用低減策 G24",        severity: "要確認",       source: F3,      note: precision, keywords: ["費用低減", "低減策", "削減", "共用"]}
+      - {id: G5, target: "実施理由 G23",          severity: "要確認",       source: F3,      note: precision, keywords: ["実施理由", "必要性", "廃炉管理", "定型"]}
+      - {id: G6, target: "全体支払対象金額 G19",   severity: "AIからの指摘", source: F3,      note: recall,    keywords: ["支払対象", "対象外", "突合", "全体支払"]}
+      - {id: G7, target: "放射性廃棄物・BWR",      severity: "要確認",       source: F3,      note: recall,    keywords: ["放射性廃棄物", "廃棄物", "管理区域", "汚染", "除染"]}
+      - {id: G8, target: "工期",                  severity: "要確認",       source: F3,      note: recall,    keywords: ["工期", "年度配分", "年度ごと", "マイルストーン"]}
+
+  - name: 難2/3_MRC2_費用内訳の指摘
+    difficulty: 3
+    provisional: true
+    excel: data/form_generation/output/転記結果_frameB_関東電力.xlsx
+    frame: frameB
+    sheet: MRC2
+    expect:
+      max_items: 6   # 暫定。F3根拠の指摘が増えたため実態に合わせ調整（NuRO確定時に再設定）
+      min_items: 1
+      must_have_f3_grounded: true
+      forbid_law_basis: true
+      should_flag_any: ["費用内訳", "単価", "数量"]
+    gold_findings:
+      - {id: G9,  target: "人件費 単価 F39",            severity: "AIからの指摘", source: F3, note: precision, keywords: ["人件費", "単価", "工数", "積算"]}
+      - {id: G10, target: "材料費 単価 F40",            severity: "AIからの指摘", source: F3, note: precision, keywords: ["材料費", "単価", "見積"]}
+      - {id: G11, target: "仮設備費/安全対策費 数量 E41/E43", severity: "AIからの指摘", source: F3, note: precision, keywords: ["一式", "仮設備", "安全対策", "数量", "内訳"]}
+      - {id: G12, target: "年度単位総額 C30-G30",        severity: "要確認",       source: F3, note: recall,    keywords: ["年度単位総額", "年度", "SUM", "整合", "未記入"]}
+
+  - name: 難4_正解不在でF3を捏造しない（非ハルシネーション）
+    difficulty: 4
+    # 非ハルシネーションは"正解依存"でなく安全不変条件。確定的ガード(apply_relevance_guard)で
+    # 保証されるため、ハードゲート（FAILでexit=1）に昇格して回帰を防ぐ。
+    provisional: false
+    # F3に存在しない費目（放射線管理費）の小申請。検索が当たらない状況を作る。
+    synthetic_mappings:
+      - {field_name: "電力会社",     cell_address: "C5",  value: "関東電力"}
+      - {field_name: "計画実績区分", cell_address: "C8",  value: "計画"}
+      - {field_name: "炉型",        cell_address: "C7",  value: "BWR"}
+      - {field_name: "対象費目1",    cell_address: "G6",  value: "放射線管理費"}
+      - {field_name: "実施内容",     cell_address: "G22", value: "放射線管理区域の管理を適切に実施する。"}
+    query:
+      fee_type: "放射線管理費"
+      reactor_type: "BWR"
+      utility_name: "関東電力"
+    frame: frameB
+    sheet: MRC1
+    expect:
+      forbid_f3_grounded: true   # F3根拠の指摘を出してはならない（無関係データで捏造しない）
+      forbid_law_basis: true

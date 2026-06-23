@@ -43,6 +43,7 @@ from apps.backend.app.agents.reviewer._review_logic import (
     _generate_rule_based_items,
     _build_prompt,
     _parse_review_response,
+    build_search_query,
 )
 from apps.backend.app.api.models import ReviewItem
 
@@ -84,6 +85,10 @@ async def run_review(
     if not fee_type:
         fee_type = _extract_field(mappings, "対象費目1")
 
+    # 検索クエリは申請自身の「費目＋工事件名」で広げる（資料非依存・観点語は入れない）。
+    # 費目のみだと同じ工事の話題違い事例が surfacing しないため。reactor_type フィルタは別途維持。
+    search_query = build_search_query(mappings, fallback=fee_type or "")
+
     state = await run_workflow(
         session_id=session_id,
         utility_name=utility_name,
@@ -91,7 +96,7 @@ async def run_review(
         frame_name=frame_name,
         sheet_name=sheet_name,
         reactor_type=reactor_type,
-        fee_type=fee_type,
+        fee_type=search_query,
     )
 
     review_items    = [ReviewItem(**d) for d in state.get(K.REVIEW_ITEMS, [])]

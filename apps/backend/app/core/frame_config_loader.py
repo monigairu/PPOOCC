@@ -1,11 +1,15 @@
 """
 様式定義（YAML）読み込みモジュール
 
-frames/{frame_name}/{sheet_name}.yaml を読み込み、
+config/{frame_name}/{sheet_name}.yaml を読み込み、
 セクション定義とフィールドのセル番地を返す。
+（旧 frames/ から config/ へ移行。互換のため frames/ も後方探索する）
 """
 import yaml
 from pathlib import Path
+
+# 様式定義の探索先（config/ を正、frames/ は後方互換）
+_CONFIG_DIRS = (Path("config"), Path("frames"))
 
 
 def load_frame_config(frame_name: str, sheet_name: str) -> dict:
@@ -19,13 +23,14 @@ def load_frame_config(frame_name: str, sheet_name: str) -> dict:
     Returns:
         YAML の内容を辞書として返す
     """
-    yaml_path = Path("frames") / frame_name / f"{sheet_name}.yaml"
-    if not yaml_path.exists():
-        raise FileNotFoundError(
-            f"様式定義ファイルが見つかりません: {yaml_path}"
-        )
-    with open(yaml_path, "r", encoding="utf-8") as f:
-        return yaml.safe_load(f)
+    candidates = [d / frame_name / f"{sheet_name}.yaml" for d in _CONFIG_DIRS]
+    for yaml_path in candidates:
+        if yaml_path.exists():
+            with open(yaml_path, "r", encoding="utf-8") as f:
+                return yaml.safe_load(f)
+    raise FileNotFoundError(
+        f"様式定義ファイルが見つかりません: {[str(p) for p in candidates]}"
+    )
 
 
 def extract_cell_definitions(config: dict) -> dict[str, list[str]]:

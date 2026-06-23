@@ -85,6 +85,12 @@ fixed_columns:
   dtype: string
   required: false
   note: URLまたはファイルパス
+- key: reactor_type
+  label: 炉型
+  col: Z
+  dtype: string
+  required: false
+  note: 'BWR / PWR（末尾Z列・QA列と非干渉）'
 repeating_qa_columns:
   max_rounds: 6
   start_col: N
