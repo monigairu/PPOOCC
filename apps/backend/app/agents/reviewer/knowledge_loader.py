@@ -87,6 +87,24 @@ def _serving_config(datastore_id: str) -> str:
     )
 
 
+_UTILITY_SUFFIXES = ("株式会社", "（株）", "(株)", "㈱")
+
+
+def normalize_utility(name: str | None) -> str:
+    """電力会社名を正規化する（表記ゆれ吸収）。
+
+    「関東電力株式会社」「関東電力（株）」「関東電力」を全て「関東電力」に揃える。
+    ingest（保存値）と検索（フィルタ値）の両側で同じ正規化を通すことで、
+    申請様式とナレッジの会社名サフィックス差で自社フィルタが外れるのを防ぐ。
+    """
+    if not name:
+        return ""
+    s = str(name).strip()
+    for suf in _UTILITY_SUFFIXES:
+        s = s.replace(suf, "")
+    return s.strip()
+
+
 def _build_filter(conditions: dict[str, str]) -> str:
     """
     フィルタ条件辞書を Vertex AI Search のフィルタ文字列に変換する。
@@ -223,7 +241,7 @@ def load_f3(
     Args:
         caller_role:   "NuRO" or "電力"
         utility_name:  電力会社名での絞り込み（None なら全社）
-        reactor_type:  炉型での絞り込み（Phase 2 後半で struct_data 拡張予定）
+        reactor_type:  炉型での絞り込み（BWR/PWR等。struct_data.reactor_type で有効化済み）
         fee_type:      検索クエリ（費目・キーワード）
         sheet_name:    特定スキーマシートのみ検索（Phase 2 では未使用）
         limit:         返す件数の上限
@@ -233,26 +251,31 @@ def load_f3(
     """
     filter_conditions: dict[str, str] = {}
 
-    # 権限フィルタ
+    # 権限フィルタ（会社名は正規化して表記ゆれを吸収）
     if caller_role == "電力":
         if not utility_name:
             return []
-        filter_conditions["utility_name"] = utility_name
+        filter_conditions["utility_name"] = normalize_utility(utility_name)
     elif caller_role == "NuRO" and utility_name:
-        filter_conditions["utility_name"] = utility_name
-
-    # reactor_type フィルタ（F3 の struct_data に追加後に有効化）
-    # TODO Phase 2 後半: ingest_knowledge.py で reactor_type を struct_data に追加
-    # if reactor_type:
-    #     filter_conditions["reactor_type"] = reactor_type
+        filter_conditions["utility_name"] = normalize_utility(utility_name)
 
     filter_str = _build_filter(filter_conditions)
-    return _search(
+
+    # 炉型フィルタ（BWR/PWR）：
+    #   Vertex AI Search はサーバ側 filter に使う struct_data フィールドのインデックス反映に
+    #   時間がかかる（新規追加フィールドは即時にはフィルタ不可）。確実性を優先し、
+    #   reactor_type は struct_data.reactor_type による Python 側の後段フィルタで適用する。
+    #   指定時のみ適用（None なら従来どおり炉型で絞らない）。
+    fetch_limit = limit if not reactor_type else min(limit * 3, 100)
+    records = _search(
         datastore_id=VERTEX_SEARCH_F3_DATASTORE_ID,
         query=fee_type or "",
         filter_str=filter_str,
-        limit=limit,
+        limit=fetch_limit,
     )
+    if reactor_type:
+        records = [r for r in records if str(r.get("reactor_type", "")) == reactor_type][:limit]
+    return records
 
 
 def load_similar_work(

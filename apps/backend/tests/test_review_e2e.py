@@ -26,14 +26,27 @@ from apps.backend.app.agents.reviewer.reviewer_agent import detect_plan_diff, _e
 # ─────────────────────────────────────────────────────────────────────────────
 
 class TestDetectPlanDiff:
-    """MRC1 様式の計画・実績差分検出"""
+    """計画・実績差分検出（設定駆動）
 
-    def _make_mappings(self, kubun: str, g18: str = "", k18: str = "") -> list[dict]:
+    detect_plan_diff は frame config の plan_actual セクションを読み、
+    plan セル(G列)と actual セル(K列)の両方を持つフィールドのみ比較する。
+    本テストは「計画/実績の両方を持つフィールド」を使ってロジックを検証する。
+    現行 MRC1.yaml で plan+actual を両方持つ代表フィールドは「工期開始日」(G10/K10)。
+    総額(G18/K18) は MRC2 の SUM 数式へ移管され plan_actual から外れたため、
+    MRC1 では差分検出の対象外（その仕様は test_sougaku_moved_to_mrc2 で固定）。
+    """
+
+    # 工期開始日 = 現行 MRC1.yaml で {plan: G10, actual: K10} を持つ代表フィールド
+    _FIELD = "工期開始日"
+    _PLAN_CELL = "G10"
+    _ACTUAL_CELL = "K10"
+
+    def _make_mappings(self, kubun: str, plan: str = "", actual: str = "") -> list[dict]:
         mappings = [{"field_name": "計画実績区分", "cell_address": "C8", "value": kubun, "reasoning": ""}]
-        if g18:
-            mappings.append({"field_name": "総額", "cell_address": "G18", "value": g18, "reasoning": ""})
-        if k18:
-            mappings.append({"field_name": "総額", "cell_address": "K18", "value": k18, "reasoning": ""})
+        if plan:
+            mappings.append({"field_name": self._FIELD, "cell_address": self._PLAN_CELL, "value": plan, "reasoning": ""})
+        if actual:
+            mappings.append({"field_name": self._FIELD, "cell_address": self._ACTUAL_CELL, "value": actual, "reasoning": ""})
         return mappings
 
     def test_keikaku_returns_empty(self):
@@ -45,7 +58,7 @@ class TestDetectPlanDiff:
         """実績提出で10%超の乖離を検出する"""
         diffs = detect_plan_diff(self._make_mappings("実績", "1000", "1300"))
         assert len(diffs) == 1
-        assert diffs[0]["field_name"] == "総額"
+        assert diffs[0]["field_name"] == self._FIELD
         assert "30.0%" in diffs[0]["diff_note"]
 
     def test_jisseki_ignores_small_diff(self):
@@ -73,10 +86,25 @@ class TestDetectPlanDiff:
     def test_kubun_missing_returns_empty(self):
         """計画実績区分が mappings にない場合は安全に空リストを返す"""
         diffs = detect_plan_diff([
-            {"field_name": "総額", "cell_address": "G18", "value": "1000", "reasoning": ""},
-            {"field_name": "総額", "cell_address": "K18", "value": "9999", "reasoning": ""},
+            {"field_name": self._FIELD, "cell_address": self._PLAN_CELL, "value": "1000", "reasoning": ""},
+            {"field_name": self._FIELD, "cell_address": self._ACTUAL_CELL, "value": "9999", "reasoning": ""},
         ])
         assert diffs == []
+
+    def test_sougaku_moved_to_mrc2(self):
+        """総額(G18/K18)は MRC2 の SUM 数式へ移管され、MRC1 の plan_actual から除外された。
+
+        設計上の意思決定を固定するテスト。総額に大きな乖離があっても MRC1 では
+        差分検出されない（数値の計画/実績比較は MRC2 側の責務へ移る）。
+        ※ MRC2.yaml に計画/実績の数値ペアが定義された時点で detect_plan_diff(sheet="MRC2")
+          が設定駆動で自動的に対象化する（コード変更不要）。
+        """
+        mappings = [
+            {"field_name": "計画実績区分", "cell_address": "C8",  "value": "実績", "reasoning": ""},
+            {"field_name": "総額",         "cell_address": "G18", "value": "1000", "reasoning": ""},
+            {"field_name": "総額",         "cell_address": "K18", "value": "9999", "reasoning": ""},
+        ]
+        assert detect_plan_diff(mappings, sheet_name="MRC1") == []
 
 
 class TestEvaluateDiff:
@@ -153,11 +181,18 @@ class TestKnowledgeLoader:
         assert result == []
 
     def test_schema_discovery(self):
-        """スキーマファイルが正しく検出される（Phase2: _excel_reader に移動）"""
+        """スキーマファイルが正しく検出される（Phase2: _excel_reader に移動）
+
+        F3 は中部(F3_knowledge.xlsx)4枚に加え、関東電力PoC評価用
+        (F3_knowledge_関東電力.xlsx)4枚を追加したため計8枚。両系統が検出されることを確認する。
+        """
         from apps.backend.app.agents.reviewer._excel_reader import _discover_schemas
         f3 = _discover_schemas("f3")
         f2 = _discover_schemas("f2")
-        assert len(f3) == 4, f"F3スキーマは4件のはず: {[s['sheet_name'] for s in f3]}"
+        f3_files = {s.get("excel_file") for s in f3}
+        assert "F3_knowledge.xlsx" in f3_files, f"中部F3が未検出: {f3_files}"
+        assert "F3_knowledge_関東電力.xlsx" in f3_files, f"関東F3が未検出: {f3_files}"
+        assert len(f3) >= 4, f"F3スキーマは4件以上のはず: {[s['sheet_name'] for s in f3]}"
         assert len(f2) == 2, f"F2スキーマは2件のはず: {[s['sheet_name'] for s in f2]}"
 
     def test_f3_schema_sheet_names(self):

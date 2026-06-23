@@ -1,0 +1,102 @@
+sheet_name: MRC2
+title: 年度単位金額情報・費用内訳
+
+field_aliases:
+  年度単位総額:
+    - 年度単位総額
+    - 年度別総額
+  人件費_数量:
+    - 人件費_数量
+    - 人件費
+
+sections:
+  - name: 年度単位金額情報
+    type: label_value
+    description: |
+      年度ごとの年度単位総額を転記。
+      ここに入力された値から MRC1!G18/K18 が SUM で算出される。
+    rows: [30]
+    fields:
+      年度単位総額_N年度:     C30
+      年度単位総額_N+1年度:   D30
+      年度単位総額_N+2年度:   E30
+      年度単位総額_N+3年度:   F30
+      年度単位総額_N+4年度:   G30
+
+  - name: 費用内訳
+    type: tabular
+    description: |
+      参考見積書の費用内訳から、既存テンプレート行に数量と単価のみ転記する。
+      区分・名称はテンプレート側に既に記載されているため上書きしない。
+      参考見積書の金額はF列(単価)へ転記し、G列はExcel数式で自動計算する。
+      G列には数式が入っているため転記対象外。
+    header_rows: [37, 38]
+    data_start_row: 39
+    json_key: 費用内訳
+    row_match:
+      rows:
+        - {row: 39, row_id: 人件費}
+        - {row: 40, row_id: 材料費}
+        - {row: 41, row_id: 仮設備費}
+        - {row: 42, row_id: 品質保証費}
+        - {row: 43, row_id: 安全対策費}
+        - {row: 44, row_id: 現場経費}
+        - {row: 45, row_id: 諸経費}
+        - {row: 46, row_id: その他}
+    columns:
+      - {name: 数量, column: E, value_type: number}
+      - {name: 単価, column: F, value_type: number}
+      # G列は金額で =IF(E="一式",F,E*F) のため転記対象外
+
+# ─────────────────────────────────────
+# data_extractor_agent が参照する抽出スキーマ定義
+# ─────────────────────────────────────
+extraction_schema:
+
+  # ─ 年度単位金額情報 ─────────────────
+  年度単位総額_N年度:
+    type: number
+    required: false
+    unit: 円
+    description: "対象年度(N年度)の年度単位総額(PDF記載値・円単位)"
+    synonyms: [年度単位総額, N年度総額, 当年度総額]
+
+  年度単位総額_N+1年度:
+    type: number
+    required: false
+    unit: 円
+    description: "N+1年度の年度単位総額(PDF記載値・円単位)"
+    synonyms: [N+1年度総額]
+
+  年度単位総額_N+2年度:
+    type: number
+    required: false
+    unit: 円
+    description: "N+2年度の年度単位総額(PDF記載値・円単位)"
+    synonyms: [N+2年度総額]
+
+  年度単位総額_N+3年度:
+    type: number
+    required: false
+    unit: 円
+    description: "N+3年度の年度単位総額(PDF記載値・円単位)"
+    synonyms: [N+3年度総額]
+
+  年度単位総額_N+4年度:
+    type: number
+    required: false
+    unit: 円
+    description: "N+4年度の年度単位総額(PDF記載値・円単位)"
+    synonyms: [N+4年度総額]
+
+  # ─ 費用内訳 ─────────────────
+  費用内訳:
+    type: list
+    required: false
+    description: "参考見積書の費用内訳(表形式)。区分・名称は行特定にのみ使い、Excelへは数量と単価のみ転記する。金額しかない場合は金額を単価として扱う。"
+    item_fields:
+      - 区分
+      - 名称
+      - 数量
+      - 単価
+      - 金額

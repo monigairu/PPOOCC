@@ -20,34 +20,39 @@ sections:
     rows: [4, 5, 6, 7, 8]
     fields:
       年度:           C4
-      電力会社:       C5
-      工事件名:       C6
+      電力会社:        C5
+      工事件名:        C6
       炉型:           C7
-      計画実績区分:   C8
+      計画実績区分:     C8
 
   - name: 基本情報2
     type: plan_actual
-    description: ラベル列E、計画列F、実績列K の1対多対応
+    description: |
+      ラベル列E、計画列G、実績列K。
+      新テンプレ ver.5.3 では K列(実績側)に「計画値を自動コピーする数式」が
+      入っているフィールドが多いため、それらの actual セルへの転記は
+      テンプレ側の数式を破壊する。よって計画(G列)のみ転記する。
+      総額/全体支払い対象金額は MRC2 シートからの SUM 数式のためマッピング対象外。
     label_column: E
     plan_column: G
     actual_column: K
-    rows: [5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20]
+    rows: [5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17]
     fields:
-      件名:              {plan: G5,  actual: K5}
-      対象費目1:         {plan: G6,  actual: K6}
-      対象費目2:         {plan: G7,  actual: K7}
-      発電所名:          {plan: G8,  actual: K8}
-      炉型:              {plan: G9,  actual: K9}
-      工期開始日:        {plan: G10, actual: K10}
-      工期終了日:        {plan: G11, actual: K11}
-      全体工期開始日:    {plan: G12, actual: K12}
-      全体工期終了日:    {plan: G13, actual: K13}
-      対象号炉1:         {plan: G14, actual: K14}
-      対象号炉2:         {plan: G15, actual: K15}
-      対象号炉3:         {plan: G16, actual: K16}
-      対象号炉4:         {plan: G17, actual: K17}
-      総額:              {plan: G18, actual: K18}
-      全体支払い対象金額: {plan: G19, actual: K19}
+      件名:             {plan: G5}      # K5 は =IF($C$6="","",$C$6) のため除外
+      対象費目1:         {plan: G6}      # K6 は =IF(G6="","",G6) のため除外
+      対象費目2:         {plan: G7}      # K7 は =IF(G7="","",G7) のため除外
+      発電所名:          {plan: G8}      # K8 は =IF(G8="","",G8) のため除外
+      炉型:             {plan: G9}      # K9 は =IF($C$7="","",$C$7) のため除外
+      工期開始日:         {plan: G10, actual: K10}
+      工期終了日:         {plan: G11, actual: K11}
+      全体工期開始日:      {plan: G12, actual: K12}
+      全体工期終了日:      {plan: G13, actual: K13}
+      対象号炉1:          {plan: G14}     # K14 は =IF(G14="","",G14) のため除外
+      対象号炉2:          {plan: G15}     # K15 は =IF(G15="","",G15) のため除外
+      対象号炉3:          {plan: G16}     # K16 は =IF(G16="","",G16) のため除外
+      対象号炉4:          {plan: G17}     # K17 は =IF(G17="","",G17) のため除外
+      # 総額 (G18/K18) と 全体支払い対象金額 (G19/K19) は
+      # MRC2 シートからの SUM 数式のため、ここからは除外する。
 
   - name: 実施内容
     type: plan_actual
@@ -57,10 +62,10 @@ sections:
     actual_column: K
     rows: [22, 23, 24, 25]
     fields:
-      実施内容:       {plan: G22, actual: K22}
-      実施理由:       {plan: G23, actual: K23}
-      実施費用低減策: {plan: G24, actual: K24}
-      説明:           {plan: G25, actual: K25}
+      実施内容:           {plan: G22, actual: K22}
+      実施理由:           {plan: G23, actual: K23}
+      実施費用低減策:       {plan: G24, actual: K24}
+      説明:              {plan: G25, actual: K25}
 
   - name: 解体機器表
     type: tabular
@@ -71,30 +76,30 @@ sections:
     json_key: 解体機器リスト
     columns:
       - {name: 対象年度,        column: B}
-      - {name: 分類,            column: C}
+      - {name: 分類,           column: C}
       - {name: 解体機器,        column: D}
       - {name: 作業区域,        column: E}
-      - {name: 支払い対象可否,   column: F}
-      - {name: 計画_員数,       column: G}
-      - {name: 計画_解体物量,   column: H}
-      - {name: 計画_工数,       column: I}
-      - {name: 計画_費用,       column: J, unit: 千円}
-      - {name: 実績_員数,       column: K}
-      - {name: 実績_解体物量,   column: L}
-      - {name: 実績_工数,       column: M}
-      - {name: 実績_費用,       column: N, unit: 千円}
+      - {name: 支払い対象可否,    column: F}
+      - {name: 計画_員数,       column: G, value_type: number}
+      - {name: 計画_解体物量,    column: H, value_type: number}
+      - {name: 計画_工数,       column: I, value_type: number}
+      - {name: 計画_費用,       column: J, value_type: number}
+      - {name: 実績_員数,       column: K, value_type: number}
+      - {name: 実績_解体物量,    column: L, value_type: number}
+      - {name: 実績_工数,       column: M, value_type: number}
+      - {name: 実績_費用,       column: N, value_type: number}
 
-# ─────────────────────────────────────────────
+# ─────────────────────────────────────
 # data_extractor_agent が参照する抽出スキーマ定義
 # キー名は sample_source.json / cell_locator のキーと完全一致させること
-# ─────────────────────────────────────────────
+# ─────────────────────────────────────
 extraction_schema:
 
-  # ── 基本情報1 ──────────────────────────────
+  # ─ 基本情報1 ─────────────────
   年度:
     type: string
     required: true
-    description: "工事対象の年度（例: 2024）"
+    description: "工事対象の年度(例: 2024)"
     synonyms: [年度, 対象年度, 実施年度, 年]
 
   電力会社:
@@ -106,13 +111,13 @@ extraction_schema:
   工事件名:
     type: string
     required: true
-    description: "工事または業務の正式名称（基本情報1のヘッダー部分）"
+    description: "工事または業務の正式名称(基本情報1のヘッダー部分)"
     synonyms: [工事件名, 工事名称, 工事名, 業務件名]
 
   炉型:
     type: string
     required: true
-    description: "原子炉の型式（例: PWR, BWR）"
+    description: "原子炉の型式(例: PWR, BWR)"
     synonyms: [炉型, 原子炉型式, 炉の種別, リアクター型式]
 
   計画実績区分:
@@ -122,29 +127,32 @@ extraction_schema:
     description: "この報告が計画値か実績値かの区分"
     synonyms: [計画実績区分, 計画/実績, 区分, 報告区分]
 
-  # ── 基本情報2 ──────────────────────────────
+  # ─ 基本情報2 ─────────────────
   件名:
     type: string
-    required: true
+    required: false
+    writable: false
     description: "基本情報2の件名。工事件名と同一のことが多い"
     synonyms: [件名, 工事件名, 工事名称, 業務名, 案件名, 工事名]
 
   対象費目1:
-    type: string
+    type: enum
+    enum_ref: cost_item_1
     required: false
-    description: "工事費用の費目分類1（例: 施設解体一解体費）"
+    description: "工事費用の費目分類1(例: 施設解体ー解体費)"
     synonyms: [対象費目1, 費目1, 費目, 工事費目, 費用分類]
 
   対象費目2:
-    type: string
+    type: enum
+    enum_ref: cost_item_2
     required: false
-    description: "工事費用の費目分類2（例: 処理処分一非該当）"
+    description: "工事費用の費目分類2(例: 処理処分ー非該当)"
     synonyms: [対象費目2, 費目2, 費用分類2]
 
   発電所名:
     type: string
     required: true
-    description: "対象の発電所名（例: AA原子力発電所）"
+    description: "対象の発電所名(例: AA原子力発電所)"
     synonyms: [発電所名, 発電所, 原子力発電所, サイト名, 事業所名]
 
   工期開始日:
@@ -178,7 +186,7 @@ extraction_schema:
   対象号炉1:
     type: string
     required: false
-    description: "対象号炉の1つ目（例: AA1号機）"
+    description: "対象号炉の1つ目(例: AA1号機)"
     synonyms: [対象号炉1, 号炉1, 1号炉, 対象炉1]
     none_values: [なし, 該当なし, N/A, "-", none, "対象外"]
 
@@ -207,8 +215,8 @@ extraction_schema:
     type: number
     required: true
     unit: 千円
-    writable: false        # =SUM('MRC2'!...) の数式セル（plan: G18, actual: K18）
-    description: "当該年度の工事総額（千円単位）"
+    writable: false  # MRC2 シートからの SUM 数式が入っているため転記しない
+    description: "当該年度の工事総額(千円単位)"
     synonyms: [総額, 契約金額, 請負金額, 合計金額, 受注金額, お見積金額, 見積金額]
     tax_note: "税込/税抜を別途確認要"
 
@@ -216,27 +224,27 @@ extraction_schema:
     type: number
     required: false
     unit: 千円
-    writable: false        # TODO: 要確認（plan: G19, actual: K19）
-    description: "工事全体の支払い対象総額（千円単位）"
+    writable: false  # MRC2 シートからの SUM 数式が入っているため転記しない
+    description: "工事全体の支払い対象総額(千円単位)"
     synonyms: [全体支払い対象金額, 全体金額, 支払い対象金額, 工事全体金額]
 
-  # ── 実施内容 ───────────────────────────────
+  # ─ 実施内容 ─────────────────
   実施内容:
     type: text
     required: false
-    description: "工事の具体的な実施内容（長文）"
+    description: "工事の具体的な実施内容(長文)"
     synonyms: [実施内容, 工事概要, 作業内容, 施工内容, 工事内容]
 
   実施理由:
     type: text
     required: false
-    description: "工事を実施する理由・背景（長文）"
+    description: "工事を実施する理由・背景(長文)"
     synonyms: [実施理由, 工事理由, 実施背景, 施工理由, 工事目的]
 
   実施費用低減策:
     type: text
     required: false
-    description: "費用を低減するために取った施策（長文）"
+    description: "費用を低減するために取った施策(長文)"
     synonyms: [実施費用低減策, 費用低減策, コスト低減, 費用削減策]
 
   説明:
@@ -245,11 +253,11 @@ extraction_schema:
     description: "複数号炉にまたがる場合の按分の考え方など補足説明"
     synonyms: [説明, 備考, 補足, 按分説明, 注記]
 
-  # ── 解体機器表 ─────────────────────────────
+  # ─ 解体機器表 ─────────────────
   解体機器リスト:
     type: list
     required: false
-    description: "解体対象機器の一覧（表形式）"
+    description: "解体対象機器の一覧(表形式)"
     item_fields:
       - 対象年度
       - 分類
@@ -264,10 +272,33 @@ extraction_schema:
       - 実績_解体物量
       - 実績_工数
       - 実績_費用
-    # field_normalizations: 表内フィールドの値を正規化するルール
-    field_normalizations:
-      支払い対象可否:
-        canonical: "支払い対象"
-        synonyms: [支払い対象, 対象]
-        canonical_negative: "支払い対象外"
-        synonyms_negative: [支払い対象外, 対象外]
+# field_normalization: 表内フィールドの値を正規化するルール
+field_normalization:
+  支払い対象可否:
+    canonical: "支払い対象"
+    synonyms: [支払い対象, 対象]
+    canonical_negative: "支払い対象外"
+    synonyms_negative: [支払い対象外, 対象外]
+
+# taxonomy(解体機器の分類19件・正本)。MRC1 C列ドロップダウン ver5.3 由来(P2確定)。
+# 出力契約(グローバルconfig)。コードに直書きせずここから読む。
+taxonomy:
+  - ポンプ・モータ
+  - タンク・脱塩塔
+  - 配管
+  - 弁
+  - 熱交換器
+  - サポート
+  - 空調機
+  - ダクト
+  - 電気盤(バッテリー)
+  - ケーブル
+  - 保温材
+  - プールライナ
+  - その他(燃料プール内機器)
+  - その他(クレーン)
+  - その他機器
+  - 準備片付け
+  - 機材費
+  - コンクリート等(建物類)
+  - 大型機器

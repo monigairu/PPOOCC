@@ -41,6 +41,7 @@ from apps.backend.app.agents.reviewer._review_logic import (
     _generate_rule_based_items,
     _build_prompt,
     _parse_review_response,
+    apply_relevance_guard,
 )
 from apps.backend.app.agents.reviewer.criteria_loader import build_system_instruction
 from apps.backend.app.api.models import ReviewItem
@@ -277,6 +278,11 @@ async def synthesis_node(ctx: Context) -> None:
 
     # ── レスポンスをパース ──────────────────────────────────────────────────
     gemini_items: list[ReviewItem] = _parse_review_response(raw_response)
+
+    # ── 誤grounding防止：本申請の費目に整合しない F2/F3 根拠は AI知見へ降格 ──
+    gemini_items = apply_relevance_guard(
+        gemini_items, mappings, f2_knowledge, f3_own, f3_all
+    )
 
     # ── ルール検出済みセルを除外してマージ ─────────────────────────────────
     filtered_gemini = [i for i in gemini_items if i.cell_address not in rule_cells]
