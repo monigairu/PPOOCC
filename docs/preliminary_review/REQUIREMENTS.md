@@ -169,7 +169,7 @@ Tool5（差分）  → 変更なし（ルールベースのまま）
   Rerankingの追加・削除も knowledge_loader.py 内の設定変更のみ
 ```
 
-**Phase3（PoCとして実施）：マルチモーダルRAG**
+**Phase3（~~PoCとして実施~~ → PoC範囲外・§0-1）：マルチモーダルRAG**
 
 ```
 目的：写真・図面の情報もレビューに使えるようにする
@@ -330,74 +330,46 @@ sessions/{session_id}/
 
 ---
 
-## 11. 実装進捗
+## 11. 実装進捗（最新・2026-06-24）
 
-最終更新：2026-05-19
+> 旧 Phase1/2/3 区分の進捗表（2026-05-19・Phase3=実装中）は**陳腐化のため廃止**。
+> 現在の進捗・課題・残作業の**詳細な正本は `RAG_VERIFICATION.md §1（実装済み）／§2（課題・バックログ）`**。
+> 本節はそのサマリ。
 
-| Step | 内容 | 状態 | 完了度 |
-|---|---|---|---|
-| Phase1 | 構造化フィルタ型RAG・E2E検証 | 完了 | 100% |
-| Phase2 | Vertex AI Search・ハイブリッド検索 | 完了 | 100% |
-| Phase3 | Gemini 3マルチモーダル前処理 | 実装中 | 0%（詳細要件: Section 14） |
+### 11-1. PoCスコープの再定義（Phase区分→Tool区分）
+- 旧Phase1（構造化フィルタ）→ Phase2（ハイブリッド検索）は **Agent Search 上で完了**し、現行は Phase2 相当。
+- 旧 **Phase3（Tool4 補足資料マルチモーダル）は PoC範囲外**（§0-1）。Tool3（類似工事）も範囲外。
+- よって本書の進捗は **Phase進捗でなく「Tool1/2a/2b＋Tool5＋観点」の実装・検証状況**で見る。
 
-### Phase2 完了内容
-
-```
-① Toolの番号整理
-   Tool2をF3自社（2a）・F3他社（2b）に分割
-   Tool3（類似工事）・Tool4（補足資料）・Tool5（差分）の順番を整理
-
-② GCPプロジェクトでVertex AI Searchを有効化
-   create_datastores.py → nuro-f2-knowledge / nuro-f3-knowledge を作成済み
-   ingest_knowledge.py → F2・F3ナレッジをVertexAI Searchに投入済み
-   .env → データストアID・エンジンID設定済み
-
-③ knowledge_loader.pyの内部実装をVertex AI Searchに差し替え完了
-   I/F（引数・戻り値）は変更なし
-   reviewer_agent.py・APIエンドポイント・フロントエンドへの影響なし
-
-④ Phase2で追加したもの
-   _excel_reader.py       データ投入用Excel読み込みモジュール（新規）
-   langfuse_client.py     RAGトレーシング基盤（新規）
-   docker-compose.langfuse.yml  Langfuseローカル環境（新規）
-   /api/review/stats      Phase2移行判断指標エンドポイント（新規）
-   retrieval_trace        各ToolのRAG取得ログをレスポンスに追加
-```
-
-### Phase2 残存制約（要件通り）
-
-```
-① load_similar_work() はデータ未入手のためスタブ（空リスト）
-② reactor_type フィルタは struct_data 拡張後に有効化（TODOコメント済み）
-③ load_supplement() は Excelテキスト読み込み（Vertex AI Search 化は Phase3 で実施）
-```
-
-### Phase3 着手前の準備
-
-```
-① 補足資料Excel・PPTX の収集
-   data/knowledge/supplement/ に配置する
-
-② Gemini 3 でキャプション生成スクリプトの作成
-   openpyxl で画像抽出 → Gemini 3 に渡してキャプション生成 → Vertex AI Search に投入
-
-③ knowledge_loader.py の load_supplement() 内部実装を差し替え
-   ※ I/F（引数・戻り値）は変えない
-```
+### 11-2. 現在の到達点（サマリ）
+| 区分 | 状態 |
+|---|---|
+| 検索（Agent Search ハイブリッド・費目+工事名クエリ・会社名正規化・**炉型フィルタ有効化済**） | ✅ 実装・実データ検証済 |
+| grounding（F2/F3根拠の指摘）＋誤grounding防止（関連性ガード）＋指摘統合 | ✅ 実装・検証済 |
+| レビュー観点（review_criteria）／Tool5 計画実績差分（現設計に整合） | ✅ 実装済 |
+| 検証基盤（verify_rag／eval_review＋gold_expectations／review_annotation） | ✅ 整備済・回帰36 PASS |
+| **Reranking（Ranking API）** | 🔲 採用方針・**未実装**（§0-3／`RAG_VERIFICATION.md §2`） |
+| 数値妥当性チェック／転記の粒度感チェック／MRC2観点／config転記系パス追従 | 🔲 決定・未実装 |
+| ゴールド指摘（NuRO正解）の確定／認証（本番） | 🔲 未確定・将来 |
+| Tool3 類似工事／Tool4 補足資料（Phase3） | ⛔ PoC範囲外 |
 
 ---
 
-## 12. 未確定事項
+## 12. 未確定事項（最新化）
 
 | 項目 | 状況 | 対応方針 |
 |---|---|---|
-| 類似工事データ（Tool3） | 討議中 | データ入手後にVertex AI Searchに投入 |
-| reactor_typeの絞り込み | F3スキーマに列なし | Phase2でVertex AI Searchのフィルタで対応 |
+| 類似工事データ（Tool3） | **PoC範囲外**（§0-1） | 今回は扱わない |
+| reactor_typeの絞り込み | **対応済み** | F3スキーマに炉型列追加＋struct_data＋後段フィルタで有効化（§0-3） |
+| ゴールド指摘（NuRO正解）の確定 | 未確定 | 仮説 `gold_expectations.yaml` ＋ NuROアノテーションで段階的に確定（`RAG_VERIFICATION.md §A-4`） |
 | セルフレビュー（/self-review） | 事前レビュー完成後に別途開発 | review_modeパラメータで分岐する設計 |
 
 ---
 
 ## 14. Phase 3 詳細要件：マルチモーダル補足資料 RAG
+
+> **【PoC範囲外】**（§0-1）。本節（Tool4＝補足資料の写真/図面マルチモーダル）は**今回スコープ外**。
+> 将来Phaseで扱う場合の参考要件として残置。現行の進捗・採否には含めない。
 
 最終更新：2026-05-21
 
