@@ -139,7 +139,7 @@ flowchart TD
 - `scripts/verify_rag.py`：疎通／検索ヒット中身／レビュー出力を実データで検証（mappings復元・tabular・クロスシートクエリ対応）。
 - `scripts/eval_review.py` ＋ `data/review_eval/gold_expectations.yaml`：PoC検証マトリクス（難易度1〜4×2軸）を性質ベースで自動判定。
 - `scripts/review_annotation.py`：AI指摘一覧＋ゴールド網羅状況を Markdown 出力（NuROが○×記入）。
-- 関東ダミーF3生成：`scripts/generate_kanto_f3.py`（中部F3は無改変・炉型列のみ非破壊追記）。
+- 関東ダミーF3生成：`scripts/generate_kanto_f3.py`（他社ダミー＝北の海電力F3は無改変・炉型列のみ非破壊追記）。
 ```
 uv run python scripts/verify_rag.py --smoke-only                          # 疎通
 uv run python scripts/verify_rag.py --excel <結果.xlsx> [--retrieval-only] # 検索/フル
@@ -158,7 +158,7 @@ uv run python scripts/review_annotation.py --excel <結果.xlsx> --sheets MRC1,M
   原因はプロンプト（F3を指摘に変換する具体トリガー不在＋ハルシネーション防止節の過剰萎縮）。
 - 対応（§1-1）：プロンプト改修で **F3根拠の指摘が発火**（before 0/10 → after 発火）。回帰35/35→36 PASS。
 
-### A-2. 処理対象変更（中部→関東電力）の評価
+### A-2. 処理対象変更（他社→関東電力）の評価
 - 関東電力F3を新規作成・投入（自社=Tool2a 検証）。**MRC1/MRC2 ともに F3 根拠の指摘**が出ることを確認。
 - プレースホルダー検出（target非依存）＋ナレッジ参照指摘（grounded）が対象変更後も安定発火。
 
