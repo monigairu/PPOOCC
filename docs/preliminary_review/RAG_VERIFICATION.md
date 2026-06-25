@@ -66,7 +66,10 @@
 | — | 数値の妥当性チェック | 🔲 | **決定論・単位は円・許容0**。金額=数量×単価／合計=Σ明細／MRC1総額=MRC2年度総額SUM。割合Σ=100%等の未転記関係はやらない（資料依存回避） |
 | — | 転記の粒度感チェック | 🔲 | 様式が要求する粒度を review_criteria に宣言（数量/単価/金額が揃う・1式は内訳・単位整合） |
 | — | config 移行の転記系パス追従 | 🔲 | `settings`/`form_generation_pipeline`/`test_mrc1_writer` の frames→config（レビュー系は対応済み §1-8） |
-| — | データ供給のDB化 | 🔲(本番) | Excel手管理→システム記録元(DB)→Agent Search 増分ingest（§3） |
+| — | F3スキーマを ver.5.3 平坦形式へ | 🔲 | 列を発電所/プラント/工事等の平坦形式に合わせる（schema YAML中心・I/F不変。R1/§3-3） |
+| — | BigQuery平坦テーブル＋Agent Search索引 | 🔲 | Excel→平坦化→BigQuery→Agent Search索引。**作って eval/マトリクス再検証で確定**（measure-first・§3-3）。`knowledge_loader` はID差し替えのみ |
+| — | 承諾→F3 Excel追記→BigQuery反映（還流） | 🔲(本番) | **実現性確認済み**（追記=openpyxl／反映=INSERT/MERGE）。**PoCは凍結＝未実装**（再現性のため・R6/§3-3） |
+| — | Reranking（Ranking API） | 🔲 | semantic-ranker を `_search()` 後段に（§3-2・採用方針） |
 
 ---
 
@@ -91,11 +94,22 @@ PoCの小規模で"たまたま動く"設計にしない。本番は N社 × 各
   Answer API https://docs.cloud.google.com/generative-ai-app-builder/docs/answer ／
   Gemini Enterprise https://docs.cloud.google.com/agentspace/docs/overview ／ 料金 https://cloud.google.com/generative-ai-app-builder/pricing
 
-### 3-3. データストア方針（未来志向だが最小インフラ＝ゼロ移行）
-- **PoC：Firestore のみ**（承諾=`feedbacks`、集計=`review_stats`）。
-- **将来**：Firestore→BigQuery のマネージド連携で**移行なし**に分析層を追加 ＋ 承諾ナレッジをキュレーション後
-  **Agent Search(F3) へ増分ingest**して次回レビューに効かせる。
-- ※「承諾ナレッジを次回検索で活かす」最終先は **Agent Search(F3)**。BigQueryは分析・蓄積で検索はしない。
+### 3-3. データストア方針（2026-06-25 更新：本番想定のデータ持ち方を確定）
+
+**役割**：Excel=正本／**BigQuery=データ置き場**／**Agent Search=検索エンジン（BigQueryを索引）**／Firestore=レビュー運用状態。
+データの流れ：`Excel(正本) → 平坦化(1メッセージ=1行) → BigQuery → Agent Search索引 → RAG検索`。
+
+- **F3知識（検索用）**：本番想定で **BigQuery（平坦テーブル）→ Agent Search が索引** する構成を**PoCでも採用**する
+  （今回データはほぼ固定＝凍結のため「無限に連なる」問題は起きず、BigQuery採用に支障なし）。
+  - **採用は"作って再検証してから確定"**（measure-first）。`verify_rag`/`eval_review`/マトリクスが新データストアで
+    全PASSすることを確認 → 本採用。落ちる場合は**安全策＝二系統**（Agent Search直接投入＋BigQuery並列）に切替し、
+    RAG検索は実証済み経路のまま維持。
+  - 留意：構造化(BigQuery)データストアは「検索対象テキスト＝メッセージ内容」「フィルタ＝費目/炉型/会社/発電所等」の
+    スキーマ設定が必要。同期はバッチ（PoCの凍結データでは問題なし）。
+- **レビュー運用状態**：引き続き **Firestore**（採否・undo・履歴・低レイテンシ）。
+- **承諾ナレッジの還流（フィードバック）**：承諾→F3 Excel追記→平坦化→DB反映→次回検索に効かせる、は **本番機能**。
+  追記＝openpyxlで容易／BigQuery反映＝INSERT/MERGEで容易（実現性確認済み）。**PoCでは凍結＝未実装**（再現性のため）。
+- ※「承諾ナレッジを次回検索で活かす」最終先は **Agent Search（BigQueryを索引）**。BigQuery単体は検索しない。
 
 ### 3-4. 事前レビュー フロー（PoC現状／将来目標）
 ステップ別の確定：①手動起動（本番はCloud Functionsで簡易自動）／②Agent Search＋②.5 Ranking／⑤通知=スコープ外／
