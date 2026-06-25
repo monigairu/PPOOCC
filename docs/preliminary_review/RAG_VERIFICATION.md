@@ -70,6 +70,7 @@
 | — | BigQuery平坦テーブル＋Agent Search索引 | 🔲 | Excel→平坦化→BigQuery→Agent Search索引。**作って eval/マトリクス再検証で確定**（measure-first・§3-3）。`knowledge_loader` はID差し替えのみ |
 | — | 承諾→F3 Excel追記→BigQuery反映（還流） | 🔲(本番) | **実現性確認済み**（追記=openpyxl／反映=INSERT/MERGE）。**PoCは凍結＝未実装**（再現性のため・R6/§3-3） |
 | — | Reranking（Ranking API） | 🔲 | semantic-ranker を `_search()` 後段に（§3-2・採用方針） |
+| — | 提出タイミング＋G/K列フィルタ | 🔲 | 区分(C8)で **RAG対象シート**(計画→計画申請時 KNI_1G_01／実績→費用請求時 KNI_1G_02)と**レビュー列**(計画=G／実績=K)を分岐。情報提供時は検索対象外。**実績の差分はTool5**＝課題①(Tool5→MRC2)と連動。`submission_timing` 後段フィルタ＋セルG/K選別・I/F不変・measure-first（REQUIREMENTS §0-3） |
 
 ---
 
