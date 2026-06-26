@@ -183,14 +183,14 @@ class TestKnowledgeLoader:
     def test_schema_discovery(self):
         """スキーマファイルが正しく検出される（Phase2: _excel_reader に移動）
 
-        F3 は中部(F3_knowledge.xlsx)4枚に加え、関東電力PoC評価用
+        F3 は北の海電力(F3_knowledge.xlsx)4枚に加え、関東電力PoC評価用
         (F3_knowledge_関東電力.xlsx)4枚を追加したため計8枚。両系統が検出されることを確認する。
         """
         from apps.backend.app.agents.reviewer._excel_reader import _discover_schemas
         f3 = _discover_schemas("f3")
         f2 = _discover_schemas("f2")
         f3_files = {s.get("excel_file") for s in f3}
-        assert "F3_knowledge.xlsx" in f3_files, f"中部F3が未検出: {f3_files}"
+        assert "F3_knowledge.xlsx" in f3_files, f"北の海電力F3が未検出: {f3_files}"
         assert "F3_knowledge_関東電力.xlsx" in f3_files, f"関東F3が未検出: {f3_files}"
         assert len(f3) >= 4, f"F3スキーマは4件以上のはず: {[s['sheet_name'] for s in f3]}"
         assert len(f2) == 2, f"F2スキーマは2件のはず: {[s['sheet_name'] for s in f2]}"

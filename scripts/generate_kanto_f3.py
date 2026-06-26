@@ -1,7 +1,7 @@
 """
 関東電力向け F3 ダミーナレッジ生成スクリプト（PoC検証マトリクス対応・非破壊）
 
-既存の中部電力 F3（data/knowledge/F3_knowledge.xlsx）は変更しない（炉型列の追記は別マイグレーション）。
+既存の北の海電力 F3（data/knowledge/F3_knowledge.xlsx）は変更しない（炉型列の追記は別マイグレーション）。
 別ファイル data/knowledge/F3_knowledge_関東電力.xlsx を新規生成し、C3=関東電力株式会社 を明示設定する。
 
 PoC検証マトリクス（難易度1〜4）を回せるよう、以下を意図的に散りばめる：
@@ -249,7 +249,7 @@ def _assign_varied_authors() -> None:
 
 
 def _write_row_from_B(ws, row_idx: int, values: list, reactor_type: str = "") -> None:
-    """データを B 列(=2)から書き、炉型は固定列 Z(=26) に書く（中部F3と同レイアウト）。"""
+    """データを B 列(=2)から書き、炉型は固定列 Z(=26) に書く（北の海電力F3と同レイアウト）。"""
     for offset, val in enumerate(values):
         ws.cell(row=row_idx, column=2 + offset, value=val)
     if reactor_type:
@@ -283,7 +283,7 @@ def generate_excel() -> Path:
 
 def generate_schemas() -> None:
     """既存 f3_kni_*_schema.yaml を複製し excel_file を関東ファイルに差し替える。
-    （中部スキーマは reactor_type col:Z を含むため、関東スキーマも自動的に炉型対応になる）"""
+    （北の海電力スキーマは reactor_type col:Z を含むため、関東スキーマも自動的に炉型対応になる）"""
     for src in sorted(SCHEMA_DIR.glob("f3_kni_*_schema.yaml")):
         with open(src, encoding="utf-8") as f:
             schema = yaml.safe_load(f)

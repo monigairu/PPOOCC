@@ -820,7 +820,7 @@ function ChatPanel({ selectedCell, sessionId, frameName, onCellEdit }) {
           value={input}
           onChange={(e) => setInput(e.target.value)}
           onKeyDown={(e) => e.key === "Enter" && !e.shiftKey && handleSend()}
-          placeholder={selectedCell ? "質問や変更指示を入力（例: 電力会社を中部電力に変えて）" : "左のテーブルから行を選択してください"}
+          placeholder={selectedCell ? "質問や変更指示を入力（例: 電力会社を北の海電力に変えて）" : "左のテーブルから行を選択してください"}
           disabled={!selectedCell || isLoading}
           style={{
             flex: 1,

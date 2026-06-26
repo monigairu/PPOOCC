@@ -35,7 +35,7 @@
 **重要**: 純粋な JSON のみ出力してください。説明文・コードブロックは不要です。
 
 ### 編集指示が明確
-{"type": "edit", "field": "電力会社", "new_value": "中部電力", "confidence": 0.95}
+{"type": "edit", "field": "電力会社", "new_value": "北の海電力", "confidence": 0.95}
 
 ### フィールドが曖昧・値が不明
 {"type": "ambiguous", "clarification_question": "電力会社をどの値に変更しますか？"}
