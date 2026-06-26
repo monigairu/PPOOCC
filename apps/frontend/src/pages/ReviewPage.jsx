@@ -70,7 +70,8 @@ function Spinner({ size = 14, color = T.teal }) {
 }
 
 // ── 左パネル: セッション一覧（未レビュー/レビュー済みタブ切替） ─────────────
-function SessionSidebar({ sessions, selectedSession, isLoadingSessions, onSelect, onStartReview, onSaveReview, isReviewing, isSaving, hasReviewItems, activeTab, onTabChange }) {
+function SessionSidebar({ sessions, selectedSession, isLoadingSessions, onSelect, onStartReview, onSaveReview, onUploadForm, isReviewing, isUploading, isSaving, hasReviewItems, activeTab, onTabChange }) {
+  const fileInputRef = useRef(null);
   const unreviewed = sessions.filter(s => s.review_status !== "completed");
   const reviewed   = sessions.filter(s => s.review_status === "completed");
   const isSelectedUnreviewed = selectedSession && selectedSession.review_status !== "completed";
@@ -164,6 +165,35 @@ function SessionSidebar({ sessions, selectedSession, isLoadingSessions, onSelect
 
       {/* ボタンエリア */}
       <div style={{ padding: "10px 12px", borderTop: `1px solid ${T.border}`, display: "flex", flexDirection: "column", gap: 8 }}>
+        {/* 様式Excel（転記結果）をアップロードしてレビュー */}
+        <input
+          ref={fileInputRef}
+          type="file"
+          accept=".xlsx,.xls"
+          style={{ display: "none" }}
+          onChange={(e) => {
+            const f = e.target.files?.[0];
+            if (f) onUploadForm(f);
+            e.target.value = "";
+          }}
+        />
+        <button
+          onClick={() => fileInputRef.current?.click()}
+          disabled={isUploading}
+          title="完成した様式（転記結果Excel）を読み込んでレビュー対象に追加します"
+          style={{
+            width: "100%", padding: "8px", borderRadius: 8,
+            border: `1px dashed ${T.teal}`,
+            background: isUploading ? T.borderLight : "transparent",
+            color: isUploading ? T.textDim : T.tealLight,
+            fontSize: 12, fontWeight: 700,
+            cursor: isUploading ? "not-allowed" : "pointer",
+            display: "flex", alignItems: "center", justifyContent: "center",
+            gap: 6, transition: "all 0.15s", fontFamily: "inherit",
+          }}
+        >
+          {isUploading ? <><Spinner color={T.teal} size={12} />読み込み中...</> : "＋ 様式Excelを追加"}
+        </button>
         {/* 未レビュー: レビュー結果を保存 */}
         {isSelectedUnreviewed && hasReviewItems && (
           <button
@@ -693,6 +723,7 @@ export default function ReviewPage() {
   const [selectedSession, setSelectedSession] = useState(null);
   const [activeTab, setActiveTab] = useState("unreviewed");
   const [isReviewing, setIsReviewing] = useState(false);
+  const [isUploading, setIsUploading] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [reviewId, setReviewId] = useState(null);
   const [reviewItems, setReviewItems] = useState([]);
@@ -830,6 +861,57 @@ export default function ReviewPage() {
     }
   };
 
+  // 様式Excel（転記結果）をアップロードしてレビュー対象セッションを作成する
+  const handleUploadForm = async (file) => {
+    if (!file) return;
+    setIsUploading(true);
+    setError("");
+    try {
+      const fd = new FormData();
+      fd.append("file", file);
+      fd.append("frame_name", "frameB");
+      fd.append("sheet_name", "MRC1");
+      const res = await fetch(`${API_BASE}/review/upload`, { method: "POST", body: fd });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.detail || "様式の読み込みに失敗しました");
+      }
+      const data = await res.json();
+
+      // セッション一覧を更新し、作成したセッションを選択状態にする
+      const list = await fetchSessions();
+      const created = list.find((s) => s.session_id === data.session_id) || {
+        session_id: data.session_id,
+        utility_name: "",
+        frame_name: data.frame_name,
+        sheet_name: data.sheet_name,
+        review_status: "not_reviewed",
+      };
+      sessionStorage.setItem("nuro_last_session_id", created.session_id);
+      setActiveTab("unreviewed");
+
+      // _selectSession は空テンプレートを読むため、ここでは選択状態のリセットのみ行い
+      // アップロードした様式の実値（result-layout）を中央プレビューに表示する
+      setSelectedSession(created);
+      setReviewItems([]);
+      setSummary("");
+      setFeedbackMap({});
+      setSelectedCell(null);
+      setSelectedReviewItem(null);
+      setTemplateError(null);
+      setSessionMappings(data.mappings || []);
+
+      fetch(`${API_BASE}/result-layout/${data.session_id}?frame_name=${data.frame_name}&sheet_name=${data.sheet_name}`)
+        .then((r) => (r.ok ? r.json() : null))
+        .then((layout) => { if (layout) setTemplate(layout); })
+        .catch(() => {});
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setIsUploading(false);
+    }
+  };
+
   // セルクリック
   const handleCellClick = (mapping, reviewItem) => {
     setSelectedCell(mapping);
@@ -942,7 +1024,9 @@ export default function ReviewPage() {
           onSelect={handleSelectSession}
           onStartReview={handleStartReview}
           onSaveReview={handleSaveReview}
+          onUploadForm={handleUploadForm}
           isReviewing={isReviewing}
+          isUploading={isUploading}
           isSaving={isSaving}
           hasReviewItems={reviewItems.length > 0}
           activeTab={activeTab}

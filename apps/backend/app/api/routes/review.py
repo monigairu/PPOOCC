@@ -20,20 +20,25 @@ Phase 2 移行判断トリガー（stats エンドポイントで確認）：
 import logging
 import uuid
 from datetime import datetime, timezone
+from pathlib import Path
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, File, Form, HTTPException, Query, UploadFile
 from google.cloud import firestore
 
 from apps.backend.app.agents.reviewer import reviewer_agent
+from apps.backend.app.agents.reviewer.result_reader import reconstruct_mappings_from_excel
 from apps.backend.app.api.models import (
+    CellMapping,
     FeedbackRequest,
     FeedbackResponse,
     FeedbackSyncRequest,
     ReviewRequest,
     ReviewResponse,
     SessionSummary,
+    UploadResponse,
 )
 from apps.backend.app.core.firestore_client import get_firestore_client
+from apps.backend.app.core.settings import OUTPUT_DIR
 
 logger = logging.getLogger(__name__)
 
@@ -124,6 +129,111 @@ async def run_review(request: ReviewRequest):
         mappings=mappings,
         retrieval_trace=retrieval_trace,
     )
+
+
+@router.post("/review/upload", response_model=UploadResponse)
+async def upload_form_for_review(
+    file: UploadFile = File(...),
+    frame_name: str = Form(default="frameB", pattern=r"^[a-zA-Z0-9_\-]+$"),
+    sheet_name: str = Form(default="MRC1", pattern=r"^[a-zA-Z0-9_\-]+$"),
+    utility_name: str = Form(default=""),
+):
+    """完成した様式（転記結果Excel）を受け取り、レビュー対象セッションを作成する。
+
+    様式自動作成（転記）を経ずに、すでに転記済みの様式Excelをそのまま事前レビューに
+    かけるための入口。Excel→mappings 復元（result_reader）→ Firestore セッション保存まで行い、
+    以降は既存の /review 画面（セッション選択 → POST /api/review）でレビューできる。
+
+    PoC: caller_role="NuRO" 固定（レビューは reviewer_agent.run_review が担当）。
+    """
+    filename = file.filename or "form.xlsx"
+    if Path(filename).suffix.lower() not in (".xlsx", ".xls"):
+        raise HTTPException(status_code=400, detail="様式は .xlsx / .xls を指定してください")
+
+    safe_frame = Path(frame_name).name
+    safe_sheet = Path(sheet_name).name
+    session_id = str(uuid.uuid4())
+
+    # result-layout エンドポイントが参照する命名で保存する（中央プレビューを既存経路で描画）
+    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    result_path = OUTPUT_DIR / f"result_{safe_frame}_{session_id}.xlsx"
+    try:
+        result_path.write_bytes(await file.read())
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"様式の保存に失敗しました: {e}")
+
+    # 様式定義（config）に基づき mappings を復元（特定費目・特定ファイルに依存しない）
+    try:
+        mappings = reconstruct_mappings_from_excel(result_path, safe_frame, safe_sheet)
+    except FileNotFoundError:
+        result_path.unlink(missing_ok=True)
+        raise HTTPException(status_code=400, detail=f"様式定義が見つかりません: {safe_frame}/{safe_sheet}")
+    except Exception as e:
+        result_path.unlink(missing_ok=True)
+        raise HTTPException(status_code=400, detail=f"様式の読み込みに失敗しました: {e}")
+
+    if not mappings:
+        result_path.unlink(missing_ok=True)
+        raise HTTPException(status_code=400, detail="様式から転記内容を読み取れませんでした（シート名・様式を確認してください）")
+
+    # 電力会社名は様式から自動取得（未指定時）。会社名はナレッジフィルタに使う
+    resolved_utility = utility_name.strip() or reviewer_agent._extract_field(mappings, "電力会社") or "未設定"
+    session_name = _extract_session_name(mappings, filename)
+
+    _save_review_session(
+        session_id=session_id,
+        utility_name=resolved_utility,
+        frame_name=safe_frame,
+        sheet_name=safe_sheet,
+        mappings=mappings,
+        session_name=session_name,
+    )
+
+    return UploadResponse(
+        session_id=session_id,
+        frame_name=safe_frame,
+        sheet_name=safe_sheet,
+        mappings=[CellMapping(**m) for m in mappings],
+        message=f"様式を読み込みました（{len(mappings)}項目）。レビューを開始できます。",
+    )
+
+
+def _extract_session_name(mappings: list[dict], filename: str) -> str:
+    """様式から表示用セッション名を生成する（工事件名 > ファイル名）。"""
+    for field in ("工事件名", "件名", "工事名"):
+        for m in mappings:
+            if m.get("field_name") == field:
+                val = str(m.get("value", "")).strip()
+                if val and val not in ("なし", "N/A", "-", ""):
+                    return val[:40]
+    return Path(filename).stem[:40]
+
+
+def _save_review_session(
+    session_id: str,
+    utility_name: str,
+    frame_name: str,
+    sheet_name: str,
+    mappings: list[dict],
+    session_name: str = "",
+) -> None:
+    """レビュー対象セッションを Firestore に保存する（/api/sessions と互換のスキーマ）。"""
+    try:
+        db = get_firestore_client()
+        db.collection("sessions").document(session_id).set({
+            "session_id": session_id,
+            "utility_name": utility_name,
+            "session_name": session_name,
+            "frame_name": frame_name,
+            "sheet_name": sheet_name,
+            "mappings": mappings,
+            "created_at": firestore.SERVER_TIMESTAMP,
+            "reviewed": False,
+            "input_gcs_path": None,
+            "output_gcs_path": None,
+        })
+    except Exception as e:
+        logger.warning("Firestoreへのレビューセッション保存に失敗（session_id=%s）: %s", session_id, e)
 
 
 @router.post("/review/{review_id}/feedback", response_model=FeedbackResponse)
