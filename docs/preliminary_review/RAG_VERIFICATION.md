@@ -21,7 +21,7 @@
 
 ---
 
-## 1. 検証で確定した設計判断（#1〜8＝実装済み・CONFIRMED／#9＝採用方針・未実装）
+## 1. 検証で確定した設計判断（#1〜8・10〜12＝実装済み・CONFIRMED／#9＝採用方針・未実装）
 
 | # | 判断 | 要点 | 根拠/場所 |
 |---|---|---|---|
@@ -34,6 +34,9 @@
 | 7 | **検索クエリの一般化** | クエリを申請自身の **費目＋工事件名** で構成（観点語ハードコードなし）。Tool2a surfacing 10→16件 | `build_search_query`／`reviewer_agent.py` |
 | 8 | **config/ 移行追従（レビュー系）** | frame config を `config/` へ移行。`load_frame_config` は config/ 優先・frames/ 後方互換 | `frame_config_loader.py` |
 | 9 | **Reranking 採用方針** | Agent Search の Ranking API（semantic-ranker）を**PoC採用**（§3-2）。実装は `knowledge_loader._search()` 後段（未実装・§2） | §3 |
+| 10 | **message_id の一意化**（2026-07-02） | 旧形式 `{id}_{round}` は同一ラウンドの質問/回答で衝突し、doc_id 上書きで**271→158件（42%）が silently 消失**していた。`{id}_{round}_{direction}` に修正（下流利用なし・ver5.3「1メッセージ=1行」に整合） | `_excel_reader.py`／一意性テスト |
+| 11 | **炉型Z列の復元**（2026-07-02） | 中部→北の海リネーム（1f2efe8）で正本ExcelのZ列が欠落し、**炉型後段フィルタが silently 全件除外**になっていた退行を修正（f9adad2からIDマッチングで75行復元）。Z列欠落の回帰ガードテスト追加 | `data/knowledge/*.xlsx`／`test_f3_reactor_type_present` |
+| 12 | **BigQuery→Agent Search 経路の本採用**（2026-07-02・Step1） | `Excel→平坦化(ver5.3)→BigQuery→Agent Search索引` を実装し、マトリクス全PASSで本採用（measure-first・二系統フォールバック不要だった）。`_to_record` に cost_category→fee_type 互換エイリアス（relevance guard の grounding降格防止） | `ingest_knowledge.py`／`knowledge_loader.py` |
 
 **横断原則（最重要・誤実装防止）**：チェックの拠り所は「**様式定義（config）＋普遍的算術**」のみ。特定費目/見積書
 構造/検証ケースに**ハードコード・過剰適合しない**。`run_review` / `knowledge_loader` の I/F は不変。
@@ -42,7 +45,8 @@
 - **Firestore**＝レビュー中の運用状態（リアルタイム）。
 - **Agent Search(F3)**＝検索で根拠を引く本体／承諾ナレッジの還流先（将来）。
 - **BigQuery＝2用途**：①F3知識の置き場（PoC採用・Agent Searchが索引）／②採否結果の分析・蓄積（検索しない・将来）。
-- ※現状実装はExcel→Agent Search直接投入。BigQuery①経由は目標（§2・§3-3）。
+- ※①は**実装済み（2026-07-02・Step1）**：`Excel→平坦化(ver5.3)→BigQuery→Agent Search索引` が現行経路（§1-12）。
+  旧直接投入データストア（nuro-f3-knowledge）は比較基準として残置・検索には未使用。
 
 ---
 
@@ -68,8 +72,8 @@
 | — | 数値の妥当性チェック（**軽量版＝数式破壊検知**・2026-07-02確定） | 🔲 | **決定論・単位は円・許容0**。合計・関数セルの結果を再計算と突合し、**数式のベタ値上書き・SUM範囲ずれを検出**（金額=数量×単価／合計=Σ明細／MRC1総額=MRC2年度総額SUM）。テンプレ数式が健在なら指摘ゼロが正常（算術は数式で構造保証＝2026-06-26分析。フル独立検証はレビュー価値ゼロのため不採用）。割合Σ=100%等の未転記関係はやらない（資料依存回避）。**Tool5の乖離検出（閾値10%）とは別物**（REQUIREMENTS §0-6） |
 | — | 転記の粒度感チェック | 🔲 | 様式が要求する粒度を review_criteria に宣言（数量/単価/金額が揃う・1式は内訳・単位整合） |
 | — | config 移行の転記系パス追従 | 🔲 | `settings`/`form_generation_pipeline`/`test_mrc1_writer` の frames→config（レビュー系は対応済み §1-8） |
-| — | F3スキーマを ver.5.3 平坦形式へ | 🔲 | 列を発電所/プラント/工事等の平坦形式に合わせる（schema YAML中心・I/F不変。R1/§3-3） |
-| — | BigQuery平坦テーブル＋Agent Search索引 | 🔲 | Excel→平坦化→BigQuery→Agent Search索引。**作って eval/マトリクス再検証で確定**（measure-first・§3-3）。`knowledge_loader` はID差し替えのみ |
+| — | F3スキーマを ver.5.3 平坦形式へ | 🟦 | **実装済み（2026-07-02・Step1）**：`VER53_COLUMNS`/`to_ver53_rows`（`_excel_reader.py`）＝正準列契約＋射影。sheet_name付与・message_id一意化（§1-10）込み |
+| — | BigQuery平坦テーブル＋Agent Search索引 | 🟦 | **実装済み・本採用（2026-07-02・Step1）**：`ingest_knowledge.py --backend bigquery` → `nuro-f3-bq-knowledge`（FULL同期・id_field=message_id）。マトリクス全PASS・回帰41 PASS・切替は .env のID差し替えのみ（§1-12） |
 | — | 承諾→F3 Excel追記→BigQuery反映（還流） | 🔲(本番) | **実現性確認済み**（追記=openpyxl／反映=INSERT/MERGE）。**PoCは凍結＝未実装**（再現性のため・R6/§3-3） |
 | — | Reranking（Ranking API） | 🔲 | semantic-ranker を `_search()` 後段に（§3-2・採用方針） |
 | — | 提出タイミング＋G/K列フィルタ | 🔲 | 区分(C8)で **RAG対象シート**(計画→計画申請時 KNI_1G_01／実績→費用請求時 KNI_1G_02)と**レビュー列**(計画=G／実績=K)を分岐。情報提供時は検索対象外。**実績の差分はTool5**＝課題①b(MRC2計画/実績ペア定義)と連動。`submission_timing` 後段フィルタ＋セルG/K選別・I/F不変・measure-first（REQUIREMENTS §0-3） |

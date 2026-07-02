@@ -238,6 +238,110 @@ class TestKnowledgeLoader:
         assert records[0]["message_direction"] == "nuro"
         assert records[1]["message_direction"] == "denryoku"
 
+    def test_f3_reactor_type_present(self):
+        """F3正本Excelに炉型（Z列）が存在する（Step1修正の回帰ガード）
+
+        中部電力→北の海電力リネーム時にZ列が欠落し、炉型フィルタが
+        silently 無効化されていた（load_f3 の後段フィルタが全件除外）。
+        正本Excelの再生成・改名時にZ列を落とすと、ここで検知される。
+        """
+        from apps.backend.app.agents.reviewer._excel_reader import read_all_f3
+        records = read_all_f3()
+        reactor_types = {r.get("reactor_type", "") for r in records} - {""}
+        # 特定の炉型値には依存しない（過剰適合回避）。Z列の存在＝非空のみ検証する
+        assert reactor_types, "炉型がExcelから1件も読めない（Z列欠落の可能性）"
+
+    def test_message_id_unique_per_direction(self):
+        """同一ラウンドの質問と回答は別メッセージ＝message_id が衝突しない（Step1修正）
+
+        旧形式 {id}_{round} は質問/回答で同一IDになり、ingest の doc_id 上書きで
+        片方のメッセージが silently 消失していた（実データで 271→158 件に減少）。
+        """
+        from apps.backend.app.agents.reviewer._excel_reader import read_all_f3
+        records = read_all_f3()
+        assert records, "F3レコードが読めない"
+        message_ids = [r["message_id"] for r in records]
+        assert len(message_ids) == len(set(message_ids)), (
+            f"message_id 重複: {len(message_ids)} 件中 一意 {len(set(message_ids))} 件"
+        )
+
+    def test_excel_reader_adds_sheet_name(self):
+        """スキーマに sheet_name があれば各レコードに由来シートが付く（ver5.3・Step1-1）"""
+        import pandas as pd
+        from apps.backend.app.agents.reviewer._excel_reader import _read_excel_by_schema
+
+        schema = {
+            "sheet_name": "KNI_1G_01",
+            "layout": {"data_start_row": 1},
+            "loader_config": {"id_column": "A"},
+            "fixed_columns": [{"key": "id", "col": "A", "dtype": "string"}],
+            "output_model": {"flatten_qa": False},
+            "meta_cells": {},
+        }
+        raw_df = pd.DataFrame([["03_1G_01_0001"]])
+
+        with patch("apps.backend.app.agents.reviewer._excel_reader.pd.read_excel", return_value=raw_df):
+            from pathlib import Path
+            records, _ = _read_excel_by_schema(schema, Path("dummy.xlsx"))
+
+        assert len(records) == 1
+        assert records[0]["sheet_name"] == "KNI_1G_01"
+
+    def test_ver53_columns_cover_f3_schemas(self):
+        """全F3スキーマの fixed_columns キーが ver5.3 正準列＋付帯列に収まっている（Step1-1）
+
+        逆方向も検証：ver5.3 本体列のうち flatten_qa 生成分（message_id/message_content）
+        を除くすべてが、各スキーマの fixed_columns に実在する。
+        → schema YAML と VER53_COLUMNS の契約が乖離したらここで落ちる。
+        """
+        from apps.backend.app.agents.reviewer._excel_reader import (
+            VER53_AUX_COLUMNS,
+            VER53_COLUMNS,
+            _discover_schemas,
+        )
+        generated_keys = {"message_id", "message_content"}
+        allowed = set(VER53_COLUMNS) | set(VER53_AUX_COLUMNS)
+        required_fixed = set(VER53_COLUMNS) - generated_keys
+
+        schemas = _discover_schemas("f3")
+        assert schemas, "F3スキーマが検出されない"
+        for schema in schemas:
+            keys = {c["key"] for c in schema.get("fixed_columns", [])}
+            assert keys <= allowed, (
+                f"{schema['sheet_name']}: ver5.3契約外の列 {keys - allowed}"
+            )
+            assert required_fixed <= keys, (
+                f"{schema['sheet_name']}: ver5.3必須列の欠落 {required_fixed - keys}"
+            )
+
+    def test_to_ver53_rows_projection(self):
+        """to_ver53_rows は正準列＋付帯列に射影し、欠損は既定値・余分キーは落とす（Step1-1）"""
+        from apps.backend.app.agents.reviewer._excel_reader import (
+            VER53_AUX_COLUMNS,
+            VER53_COLUMNS,
+            to_ver53_rows,
+        )
+        records = [{
+            "id": "03_1G_01_0001",
+            "message_id": "03_1G_01_0001_01",
+            "message_content": "確認します",
+            "cost_category": "維持管理費",
+            "sheet_name": "KNI_1G_01",
+            "round": 1,
+            "unexpected_key": "落とすべき",
+        }]
+        rows = to_ver53_rows(records)
+
+        assert len(rows) == 1
+        row = rows[0]
+        assert set(row.keys()) == set(VER53_COLUMNS) | set(VER53_AUX_COLUMNS)
+        assert "unexpected_key" not in row
+        assert row["id"] == "03_1G_01_0001"
+        assert row["cost_category"] == "維持管理費"
+        assert row["submission_timing"] == ""   # 欠損は空文字
+        assert row["round"] == 1                # round は数値のまま
+        assert to_ver53_rows([{}])[0]["round"] == 0  # round の既定値は 0
+
     def test_supplement_returns_empty_for_denryoku(self):
         """電力ロールは補足資料を参照できない（Phase 3）"""
         from apps.backend.app.agents.reviewer.knowledge_loader import load_supplement

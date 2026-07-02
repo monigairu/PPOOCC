@@ -41,6 +41,8 @@ from apps.backend.app.core.settings import (
     GCP_LOCATION,
     GCP_PROJECT_ID,
     VERTEX_SEARCH_F2_DATASTORE_ID,
+    VERTEX_SEARCH_F3_BQ_DATASTORE_ID,
+    VERTEX_SEARCH_F3_BQ_ENGINE_ID,
     VERTEX_SEARCH_F3_DATASTORE_ID,
     VERTEX_SEARCH_F2_ENGINE_ID,
     VERTEX_SEARCH_F3_ENGINE_ID,
@@ -70,6 +72,7 @@ def _serving_config(datastore_id: str) -> str:
     """
     engine_id = (
         VERTEX_SEARCH_F2_ENGINE_ID         if datastore_id == VERTEX_SEARCH_F2_DATASTORE_ID
+        else VERTEX_SEARCH_F3_BQ_ENGINE_ID if datastore_id == VERTEX_SEARCH_F3_BQ_DATASTORE_ID
         else VERTEX_SEARCH_F3_ENGINE_ID    if datastore_id == VERTEX_SEARCH_F3_DATASTORE_ID
         else VERTEX_SEARCH_SUPPLEMENT_ENGINE_ID if datastore_id == VERTEX_SEARCH_SUPPLEMENT_DATASTORE_ID
         else ""
@@ -184,6 +187,12 @@ def _to_record(result: discoveryengine.SearchResponse.SearchResult) -> dict[str,
     # content（検索対象テキスト）を message_content として追加
     if doc.content and doc.content.raw_bytes:
         record["message_content"] = doc.content.raw_bytes.decode("utf-8", errors="replace")
+
+    # ver5.3 平坦テーブル（BigQuery索引・列名 cost_category）と旧直接投入
+    # （struct キー fee_type）の互換エイリアス。apply_relevance_guard 等の
+    # 下流は fee_type を読むため、どちらのデータストアでも同じ形に揃える。
+    if "fee_type" not in record and record.get("cost_category"):
+        record["fee_type"] = record["cost_category"]
 
     record["_doc_id"] = doc.id
     return record

@@ -15,7 +15,8 @@
 >
 > **⚠️ §0 は確定"仕様（目標）"であり、"実装済み"とは限らない**。実装状況は **§11-2（到達点サマリ）**／
 > **`RAG_VERIFICATION.md §1（実装済）・§2（未実装）`** で必ず確認すること。
-> （特に **§0-3 後半の計画/実績シート分岐・Reranking、§0-7 の BigQuery/平坦化/ver.5.3 は未実装🔲**）
+> （**§0-7 の BigQuery/平坦化/ver.5.3 は実装済み🟦**（2026-07-02・Step1）。
+> 特に **§0-3 後半の計画/実績シート分岐・Reranking は未実装🔲**）
 
 ### 0-1. スコープ（PoCで対象とするTool）
 - **対象**：Tool1=F2 / Tool2a=F3自社 / Tool2b=F3他社 / Tool5=計画実績差分（ルール）＋ レビュー観点。
@@ -77,8 +78,10 @@
 
 ### 0-7. データI/O・DB設計（2026-06-25 の議論で確定）
 
-> **状態：方針は確定・実装は🔲未実装**（§2 バックログ）。**現状実装は Excel→Agent Search 直接投入**で、
-> 下記の「BigQuery経由・ver.5.3平坦化」は**目標であって現状ではない**。
+> **状態：実装済み🟦（2026-07-02・Step1・マトリクス全PASSで本採用）**。現行経路は
+> `Excel(正本) → 平坦化(ver5.3) → BigQuery → Agent Search索引（nuro-f3-bq-knowledge）`。
+> 旧 Excel→Agent Search 直接投入（nuro-f3-knowledge）は比較基準として残置・検索には未使用
+> （`RAG_VERIFICATION.md §1-10〜12`）。
 >
 > 用語：**平坦化**＝「KNI_*の横持ち（やりとりが横に伸びる）」を「**1メッセージ＝1行**」の縦持ち
 > （出力用シート相当）に変換すること。**正本**＝編集の起点（本物のコピー）。
@@ -410,7 +413,8 @@ sessions/{session_id}/
 | 検索（Agent Search ハイブリッド・費目+工事名クエリ・会社名正規化・**炉型フィルタ有効化済**） | ✅ 実装・実データ検証済 |
 | grounding（F2/F3根拠の指摘）＋誤grounding防止（関連性ガード）＋指摘統合 | ✅ 実装・検証済 |
 | レビュー観点（review_criteria）／Tool5 計画実績差分（現設計に整合） | ✅ 実装済 |
-| 検証基盤（verify_rag／eval_review＋gold_expectations／review_annotation） | ✅ 整備済・回帰36 PASS |
+| 検証基盤（verify_rag／eval_review＋gold_expectations／review_annotation） | ✅ 整備済・回帰41 PASS |
+| **F3検索基盤（Excel→平坦化ver5.3→BigQuery→Agent Search索引・§0-7）** | ✅ 実装・マトリクス全PASSで本採用（2026-07-02・Step1） |
 | **Reranking（Ranking API）** | 🔲 採用方針・**未実装**（§0-3／`RAG_VERIFICATION.md §2`） |
 | 数値妥当性チェック／転記の粒度感チェック／MRC2観点／config転記系パス追従 | 🔲 決定・未実装 |
 | ゴールド指摘（NuRO正解）の確定／認証（本番） | 🔲 未確定・将来 |
