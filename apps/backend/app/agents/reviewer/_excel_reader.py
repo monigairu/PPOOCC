@@ -182,10 +182,16 @@ def _read_excel_by_schema(
                     content = row.iloc[actual_idx].strip()
                     if not content or content in ("nan", "None"):
                         continue
+                    direction = _infer_direction(field_def["key"])
+                    # message_id は「1メッセージ=1行」（ver5.3）の一意キー。
+                    # 同一ラウンドの質問（nuro）と回答（denryoku）は別メッセージのため
+                    # 方向を含めて区別する（旧形式 {id}_{round} は質問/回答が衝突し、
+                    # ingest の doc_id 上書きでメッセージが消失していた）。
+                    suffix = direction if direction != "unknown" else f"x{field_def['col_offset']}"
                     msg_record = {**base}
-                    msg_record["message_id"] = f"{id_val}_{round_num:02d}"
+                    msg_record["message_id"] = f"{id_val}_{round_num:02d}_{suffix}"
                     msg_record["round"] = round_num
-                    msg_record["message_direction"] = _infer_direction(field_def["key"])
+                    msg_record["message_direction"] = direction
                     msg_record["message_content"] = content
                     records.append(msg_record)
         else:

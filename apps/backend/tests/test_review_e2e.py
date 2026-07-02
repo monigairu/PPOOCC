@@ -238,6 +238,20 @@ class TestKnowledgeLoader:
         assert records[0]["message_direction"] == "nuro"
         assert records[1]["message_direction"] == "denryoku"
 
+    def test_message_id_unique_per_direction(self):
+        """同一ラウンドの質問と回答は別メッセージ＝message_id が衝突しない（Step1修正）
+
+        旧形式 {id}_{round} は質問/回答で同一IDになり、ingest の doc_id 上書きで
+        片方のメッセージが silently 消失していた（実データで 271→158 件に減少）。
+        """
+        from apps.backend.app.agents.reviewer._excel_reader import read_all_f3
+        records = read_all_f3()
+        assert records, "F3レコードが読めない"
+        message_ids = [r["message_id"] for r in records]
+        assert len(message_ids) == len(set(message_ids)), (
+            f"message_id 重複: {len(message_ids)} 件中 一意 {len(set(message_ids))} 件"
+        )
+
     def test_excel_reader_adds_sheet_name(self):
         """スキーマに sheet_name があれば各レコードに由来シートが付く（ver5.3・Step1-1）"""
         import pandas as pd
