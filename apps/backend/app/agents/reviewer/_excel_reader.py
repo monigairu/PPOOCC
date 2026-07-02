@@ -20,6 +20,53 @@ logger = logging.getLogger(__name__)
 _KNOWLEDGE_DIR = Path("data/knowledge")
 _SCHEMA_DIR = _KNOWLEDGE_DIR / "schema"
 
+# ver5.3 平坦形式（1メッセージ=1行）の正準列（REQUIREMENTS.md §0-7 R1）。
+# BigQuery 平坦テーブル・Agent Search 索引のスキーマ契約として使う。
+# 各キーは schema YAML の fixed_columns キーおよび flatten_qa の生成キーと一致させる。
+VER53_COLUMNS = (
+    "id",                 # ID
+    "message_id",         # メッセージID（flatten_qa が生成: {id}_{round:02d}）
+    "start_date",         # 起票日
+    "dept_group",         # 起票者所属G
+    "author",             # 起票者
+    "ref_knowledge_id",   # 参照先ナレッジID
+    "submission_timing",  # 提出タイミング
+    "confirm_year",       # 確認年度
+    "plant_site",         # 該当発電所
+    "plant_unit",         # 該当プラント
+    "cost_category",      # 該当費目
+    "construction_name",  # 該当工事
+    "reference_url",      # 該当資料
+    "message_content",    # メッセージ内容（検索対象テキスト・flatten_qa が生成）
+)
+
+# ver5.3 本体列に加えて検索フィルタ・権限制御に使う付帯列（RAG_VERIFICATION.md §3-3）
+VER53_AUX_COLUMNS = (
+    "utility_name",       # 電力会社（正規化前。正規化は ingest 側で適用）
+    "reactor_type",       # 炉型（BWR/PWR）
+    "sheet_name",         # 由来シート（KNI_1G_01 等＝提出タイミング分岐の後ろ盾）
+    "message_direction",  # nuro / denryoku（flatten_qa が生成）
+    "round",              # やりとり回数（flatten_qa が生成）
+)
+
+
+def to_ver53_rows(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """
+    read_all_f3() の平坦レコードを ver5.3 の正準列＋付帯列に射影する。
+
+    - VER53_COLUMNS / VER53_AUX_COLUMNS にあるキーだけを残す（余分なキーは落とす）
+    - 欠けているキーは "" で埋める（round のみ 0）
+    → BigQuery ロード・Agent Search 索引が常に同一スキーマの行を受け取れる。
+    """
+    rows: list[dict[str, Any]] = []
+    for record in records:
+        row: dict[str, Any] = {}
+        for key in VER53_COLUMNS + VER53_AUX_COLUMNS:
+            default: Any = 0 if key == "round" else ""
+            row[key] = record.get(key, default)
+        rows.append(row)
+    return rows
+
 
 def _col_letter_to_idx(col: str) -> int:
     result = 0
@@ -112,6 +159,10 @@ def _read_excel_by_schema(
 
         if utility_name:
             base["utility_name"] = utility_name
+
+        # 由来シート（KNI_1G_01 等）。提出タイミング分岐・BigQuery平坦テーブルで使う
+        if schema.get("sheet_name"):
+            base["sheet_name"] = schema["sheet_name"]
 
         if qa_config and flatten_qa:
             start_col_idx = _col_letter_to_idx(qa_config["start_col"])
