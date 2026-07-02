@@ -238,6 +238,20 @@ class TestKnowledgeLoader:
         assert records[0]["message_direction"] == "nuro"
         assert records[1]["message_direction"] == "denryoku"
 
+    def test_f3_reactor_type_present(self):
+        """F3正本Excelに炉型（Z列）が存在する（Step1修正の回帰ガード）
+
+        中部電力→北の海電力リネーム時にZ列が欠落し、炉型フィルタが
+        silently 無効化されていた（load_f3 の後段フィルタが全件除外）。
+        正本Excelの再生成・改名時にZ列を落とすと、ここで検知される。
+        """
+        from apps.backend.app.agents.reviewer._excel_reader import read_all_f3
+        records = read_all_f3()
+        reactor_types = {r.get("reactor_type", "") for r in records} - {""}
+        assert reactor_types >= {"BWR", "PWR"}, (
+            f"炉型がExcelから読めない（Z列欠落の可能性）: {reactor_types}"
+        )
+
     def test_message_id_unique_per_direction(self):
         """同一ラウンドの質問と回答は別メッセージ＝message_id が衝突しない（Step1修正）
 
