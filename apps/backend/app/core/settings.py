@@ -35,6 +35,10 @@ VERTEX_SEARCH_F3_ENGINE_ID    = os.environ.get("VERTEX_SEARCH_F3_ENGINE_ID", "")
 VERTEX_SEARCH_SUPPLEMENT_DATASTORE_ID = os.environ.get("VERTEX_SEARCH_SUPPLEMENT_DATASTORE_ID", "")
 VERTEX_SEARCH_SUPPLEMENT_ENGINE_ID    = os.environ.get("VERTEX_SEARCH_SUPPLEMENT_ENGINE_ID", "")
 
+# BigQuery平坦テーブルを索引する構造化データストア（§0-7 R3・Step1）
+VERTEX_SEARCH_F3_BQ_DATASTORE_ID = os.environ.get("VERTEX_SEARCH_F3_BQ_DATASTORE_ID", "")
+VERTEX_SEARCH_F3_BQ_ENGINE_ID    = os.environ.get("VERTEX_SEARCH_F3_BQ_ENGINE_ID", "")
+
 # ── BigQuery（F3知識のデータ置き場・REQUIREMENTS §0-7 / RAG_VERIFICATION §3-3）──
 # Excel(正本) → 平坦化(ver5.3) → BigQuery → Agent Search索引 → RAG検索
 # BigQuery 自体は検索しない（Agent Search がこのテーブルを索引する）

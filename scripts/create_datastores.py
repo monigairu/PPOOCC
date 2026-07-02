@@ -43,6 +43,14 @@ _DATASTORES = [
         "display_name": "NuRO Supplement Knowledge (補足資料キャプション)",
         "env_key": "VERTEX_SEARCH_SUPPLEMENT_DATASTORE_ID",
     },
+    {
+        # F3 ver5.3 平坦テーブル（BigQuery）を索引する構造化データストア（§0-7 R3）
+        # ドキュメント投入は ingest_knowledge.py --backend bigquery が行う
+        "datastore_id": "nuro-f3-bq-knowledge",
+        "display_name": "NuRO F3 Knowledge BQ (ver5.3平坦・BigQuery索引)",
+        "env_key": "VERTEX_SEARCH_F3_BQ_DATASTORE_ID",
+        "structured": True,
+    },
 ]
 
 
@@ -50,14 +58,22 @@ def create_datastore(
     client: discoveryengine.DataStoreServiceClient,
     datastore_id: str,
     display_name: str,
+    structured: bool = False,
 ) -> str:
-    """データストアを作成して名前を返す。既存の場合はスキップ。"""
+    """データストアを作成して名前を返す。既存の場合はスキップ。
+
+    structured=True は BigQuery 等の構造化データ用（content なし・struct フィールドを索引）。
+    """
     parent = f"projects/{GCP_PROJECT_ID}/locations/{GCP_LOCATION}/collections/default_collection"
 
     data_store = discoveryengine.DataStore(
         display_name=display_name,
         industry_vertical=discoveryengine.IndustryVertical.GENERIC,
-        content_config=discoveryengine.DataStore.ContentConfig.CONTENT_REQUIRED,
+        content_config=(
+            discoveryengine.DataStore.ContentConfig.NO_CONTENT
+            if structured
+            else discoveryengine.DataStore.ContentConfig.CONTENT_REQUIRED
+        ),
         solution_types=[discoveryengine.SolutionType.SOLUTION_TYPE_SEARCH],
     )
 
@@ -88,7 +104,12 @@ def main() -> None:
 
     for spec in _DATASTORES:
         print(f"[{spec['datastore_id']}] {spec['display_name']}")
-        datastore_id = create_datastore(client, spec["datastore_id"], spec["display_name"])
+        datastore_id = create_datastore(
+            client,
+            spec["datastore_id"],
+            spec["display_name"],
+            structured=spec.get("structured", False),
+        )
         created.append((spec["env_key"], datastore_id))
         time.sleep(1)
 

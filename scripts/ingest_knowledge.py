@@ -55,6 +55,7 @@ from apps.backend.app.core.settings import (
     GCP_LOCATION,
     GCP_PROJECT_ID,
     VERTEX_SEARCH_F2_DATASTORE_ID,
+    VERTEX_SEARCH_F3_BQ_DATASTORE_ID,
     VERTEX_SEARCH_F3_DATASTORE_ID,
     VERTEX_SEARCH_SUPPLEMENT_DATASTORE_ID,
 )
@@ -262,6 +263,48 @@ def _ingest_f3_bigquery() -> None:
         print(f"  ⚠ 行数不一致: 期待 {len(rows)} 行 / 実際 {table.num_rows} 行")
         sys.exit(1)
     print(f"  ✅ BigQuery: {table.num_rows} 行ロード完了（{table_id}・全件置換）")
+
+    _index_bigquery_to_agent_search()
+
+
+def _index_bigquery_to_agent_search() -> None:
+    """BigQuery 平坦テーブルを Agent Search 構造化データストアへ索引する（§0-7 R3 の最終段）。
+
+    - data_schema="custom"：テーブルの各列がそのまま struct フィールドになる
+      （検索対象テキスト＝message_content、フィルタ＝utility_name/cost_category 等）
+    - reconciliation=FULL：テーブルと索引を完全同期（凍結データの置換に一致）
+    - id_field=message_id：ver5.3 の一意キーをドキュメントIDに使う
+    """
+    if not VERTEX_SEARCH_F3_BQ_DATASTORE_ID:
+        print("  スキップ: VERTEX_SEARCH_F3_BQ_DATASTORE_ID が未設定（create_datastores.py を先に実行）")
+        return
+
+    print("── Agent Search 索引投入（BigQuery→構造化データストア）──")
+    client = discoveryengine.DocumentServiceClient()
+    parent = (
+        f"projects/{GCP_PROJECT_ID}/locations/{GCP_LOCATION}"
+        f"/collections/default_collection/dataStores/{VERTEX_SEARCH_F3_BQ_DATASTORE_ID}"
+        f"/branches/default_branch"
+    )
+    request = discoveryengine.ImportDocumentsRequest(
+        parent=parent,
+        bigquery_source=discoveryengine.BigQuerySource(
+            project_id=GCP_PROJECT_ID,
+            dataset_id=BIGQUERY_DATASET_ID,
+            table_id=BIGQUERY_F3_TABLE_ID,
+            data_schema="custom",
+        ),
+        reconciliation_mode=discoveryengine.ImportDocumentsRequest.ReconciliationMode.FULL,
+        id_field="message_id",
+    )
+    operation = client.import_documents(request=request)
+    print("  索引作成中...（数分かかることがあります）")
+    result = operation.result(timeout=600)
+    if result.error_samples:
+        for err in result.error_samples[:3]:
+            print(f"    ⚠ 索引エラー: {err}")
+        sys.exit(1)
+    print(f"  ✅ Agent Search: {VERTEX_SEARCH_F3_BQ_DATASTORE_ID} への索引投入完了")
 
 
 def _ingest_supplement(client: discoveryengine.DocumentServiceClient) -> None:
