@@ -29,13 +29,13 @@
 | 2 | **誤grounding防止（難4）** | 引用F2/F3の費目が本申請の費目と**語を共有しなければ AI知見へ降格**（`apply_relevance_guard`）。費目名はハードコードしない一般則 | `_review_logic.py`／eval難4ハードゲート |
 | 3 | **指摘の統合** | 同一観点が複数セルに跨る場合は1指摘に統合し対象セルを列挙（過検出抑制） | `_build_prompt()`／関東 9→2・3→2件 |
 | 4 | **Tool5（計画/実績差分）現設計整合** | 総額/全体支払対象金額を MRC2 の SUM へ移管（MRC1に数値plan/actual無し）。`detect_plan_diff` は設定駆動で無変更、MRC2に計画/実績ペア定義時に自動対象化。テストを現設計に整合 | `test_review_e2e.py`／`test_sougaku_moved_to_mrc2` |
-| 5 | **炉型フィルタ有効化** | F3スキーマに炉型列(Z)追加・struct_data投入・`load_f3`で後段フィルタ（新規フィールドのindex反映遅延を回避） | `knowledge_loader.py` |
+| 5 | **炉型フィルタ有効化**（2026-07-03 手段改訂） | 炉型は**該当発電所から導出**（`plant_reactor_map.yaml`・号機上書き可）＋`load_f3`で後段フィルタ。~~F3スキーマに炉型列(Z)追加~~→**Z列は廃止が正**（ver5.3様式に炉型列は無い・§1-11） | `_excel_reader.py`／`knowledge_loader.py` |
 | 6 | **会社名正規化** | `normalize_utility`（株式会社等を除去）を ingest と検索の両側に適用＝表記ゆれで自社フィルタが外れる問題を解消 | `knowledge_loader.py`／`ingest_knowledge.py` |
 | 7 | **検索クエリの一般化** | クエリを申請自身の **費目＋工事件名** で構成（観点語ハードコードなし）。Tool2a surfacing 10→16件 | `build_search_query`／`reviewer_agent.py` |
 | 8 | **config/ 移行追従（レビュー系）** | frame config を `config/` へ移行。`load_frame_config` は config/ 優先・frames/ 後方互換 | `frame_config_loader.py` |
 | 9 | **Reranking 採用方針** | Agent Search の Ranking API（semantic-ranker）を**PoC採用**（§3-2）。実装は `knowledge_loader._search()` 後段（未実装・§2） | §3 |
 | 10 | **message_id の一意化**（2026-07-02） | 旧形式 `{id}_{round}` は同一ラウンドの質問/回答で衝突し、doc_id 上書きで**271→158件（42%）が silently 消失**していた。`{id}_{round}_{direction}` に修正（下流利用なし・ver5.3「1メッセージ=1行」に整合） | `_excel_reader.py`／一意性テスト |
-| 11 | **炉型Z列の復元**（2026-07-02） | 中部→北の海リネーム（1f2efe8）で正本ExcelのZ列が欠落し、**炉型後段フィルタが silently 全件除外**になっていた退行を修正（f9adad2からIDマッチングで75行復元）。Z列欠落の回帰ガードテスト追加 | `data/knowledge/*.xlsx`／`test_f3_reactor_type_present` |
+| 11 | **炉型は発電所から導出（Z列廃止が正）**（2026-07-03 確定） | ver5.3様式に炉型列は**存在しない**（Z列削除は意図的・ユーザー確認済み）。炉型は該当発電所→炉型のドメイン知識 `plant_reactor_map.yaml`（config・号機上書きキー対応）から**平坦化時に導出**。旧Z列の行単位値は発電所と不整合な合成ノイズだった（網走1号機にPWR/BWR混在）。導出により発電所・号機単位の一貫性が構造的に保証される（一貫性テスト追加） | `_excel_reader.py`／`plant_reactor_map.yaml`／`test_f3_reactor_type_derived_and_consistent` |
 | 12 | **BigQuery→Agent Search 経路の本採用**（2026-07-02・Step1） | `Excel→平坦化(ver5.3)→BigQuery→Agent Search索引` を実装し、マトリクス全PASSで本採用（measure-first・二系統フォールバック不要だった）。`_to_record` に cost_category→fee_type 互換エイリアス（relevance guard の grounding降格防止） | `ingest_knowledge.py`／`knowledge_loader.py` |
 
 **横断原則（最重要・誤実装防止）**：チェックの拠り所は「**様式定義（config）＋普遍的算術**」のみ。特定費目/見積書

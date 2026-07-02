@@ -36,6 +36,8 @@
 - バックエンド：**Agent Search（旧 Vertex AI Search／Discovery Engine）** のハイブリッド検索（BM25+ベクトル）。
 - クエリ：申請自身の **費目＋工事件名**（観点語はハードコードしない）。
 - フィルタ：**会社名は正規化**（株式会社等を吸収）、**炉型(BWR/PWR)** は struct_data＋後段フィルタで適用。
+  - **炉型の出所（2026-07-03確定）**：様式に炉型の列は**持たない**（ver5.3列定義に炉型なし・電力会社に手動維持させない）。
+    **該当発電所から導出**する（`data/knowledge/schema/plant_reactor_map.yaml`＝ドメイン知識のconfig・号機で異なる例外は「発電所/号機」キーで上書き）。
 - **Reranking**：Agent Search の **Ranking API（semantic-ranker）を採用方針**（surfacing/精度向上・低コスト）。
 - **提出タイミング（計画/実績）で「検索シート」と「レビュー列」を分岐**（🔲未実装・§2）（転記結果 MRC1 の C8＝計画実績区分で判定）：
 

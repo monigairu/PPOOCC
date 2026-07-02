@@ -238,18 +238,39 @@ class TestKnowledgeLoader:
         assert records[0]["message_direction"] == "nuro"
         assert records[1]["message_direction"] == "denryoku"
 
-    def test_f3_reactor_type_present(self):
-        """F3正本Excelに炉型（Z列）が存在する（Step1修正の回帰ガード）
+    def test_derive_reactor_type_map_lookup(self):
+        """炉型導出：発電所キー＋号機上書きキーの優先順位（2026-07-02設計確定）"""
+        import apps.backend.app.agents.reviewer._excel_reader as xr
+        original = xr._plant_reactor_map
+        xr._plant_reactor_map = {"敦賀発電所": "BWR", "敦賀発電所/2号機": "PWR"}
+        try:
+            assert xr.derive_reactor_type("敦賀発電所", "1号機") == "BWR"   # 発電所キー
+            assert xr.derive_reactor_type("敦賀発電所", "2号機") == "PWR"   # 号機上書きが優先
+            assert xr.derive_reactor_type("不明発電所") == ""               # マップ外は不明
+            assert xr.derive_reactor_type("") == ""
+        finally:
+            xr._plant_reactor_map = original
 
-        中部電力→北の海電力リネーム時にZ列が欠落し、炉型フィルタが
-        silently 無効化されていた（load_f3 の後段フィルタが全件除外）。
-        正本Excelの再生成・改名時にZ列を落とすと、ここで検知される。
+    def test_f3_reactor_type_derived_and_consistent(self):
+        """炉型は該当発電所から導出され、発電所・号機単位で一貫する（2026-07-02設計確定）
+
+        正本Excel（ver5.3様式）に炉型の列は存在しない（電力会社が編集する様式に
+        列を足さない）。plant_reactor_map.yaml のドメイン知識から導出するため、
+        同一発電所・号機に複数の炉型が混ざることは構造的にありえない。
         """
         from apps.backend.app.agents.reviewer._excel_reader import read_all_f3
         records = read_all_f3()
-        reactor_types = {r.get("reactor_type", "") for r in records} - {""}
-        # 特定の炉型値には依存しない（過剰適合回避）。Z列の存在＝非空のみ検証する
-        assert reactor_types, "炉型がExcelから1件も読めない（Z列欠落の可能性）"
+        with_plant = [r for r in records if r.get("plant_site")]
+        assert with_plant, "該当発電所を持つF3レコードが読めない"
+
+        derived = {r.get("reactor_type", "") for r in with_plant} - {""}
+        assert derived, "炉型が1件も導出されない（plant_reactor_map.yaml の発電所名と不一致？）"
+
+        seen: dict = {}
+        for r in with_plant:
+            key = (r["plant_site"], r.get("plant_unit", ""))
+            rt = r.get("reactor_type", "")
+            assert seen.setdefault(key, rt) == rt, f"同一発電所・号機で炉型が混在: {key}"
 
     def test_message_id_unique_per_direction(self):
         """同一ラウンドの質問と回答は別メッセージ＝message_id が衝突しない（Step1修正）
