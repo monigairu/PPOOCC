@@ -164,6 +164,12 @@ def ingest(target: str, backend: str = "direct") -> None:
     if target in ("f2", "all"):
         _ingest_f2(client)
     if target in ("f3", "all"):
+        # 誤操作ガード：F3の検索先が BigQuery索引ストア（NO_CONTENT）に切替済みの場合、
+        # 旧直接投入（contentドキュメント）を流し込むと索引を汚染するため中止する
+        if VERTEX_SEARCH_F3_DATASTORE_ID == VERTEX_SEARCH_F3_BQ_DATASTORE_ID:
+            print("エラー: VERTEX_SEARCH_F3_DATASTORE_ID が BigQuery索引ストアを指しています。")
+            print("       F3の投入は --backend bigquery を使ってください（直接投入は不可）")
+            sys.exit(1)
         _ingest_f3(client)
     if target == "supplement":
         _ingest_supplement(client)
@@ -239,6 +245,13 @@ def _ingest_f3_bigquery() -> None:
     # 会社名は検索側（load_f3）・直接投入（_build_document）と同じ正規化で表記ゆれを吸収
     for row in rows:
         row["utility_name"] = normalize_utility(row["utility_name"])
+
+    # id_field=message_id が空だと Agent Search 索引が壊れる（flatten_qa=False スキーマ混入時）
+    no_id = [r for r in rows if not r["message_id"]]
+    if no_id:
+        print(f"エラー: message_id が空の行が {len(no_id)} 件あります（flatten_qa=False のスキーマ？）")
+        print("       索引の id_field に使えないため中止します")
+        sys.exit(1)
 
     client = bigquery.Client(project=GCP_PROJECT_ID)
 

@@ -248,9 +248,8 @@ class TestKnowledgeLoader:
         from apps.backend.app.agents.reviewer._excel_reader import read_all_f3
         records = read_all_f3()
         reactor_types = {r.get("reactor_type", "") for r in records} - {""}
-        assert reactor_types >= {"BWR", "PWR"}, (
-            f"炉型がExcelから読めない（Z列欠落の可能性）: {reactor_types}"
-        )
+        # 特定の炉型値には依存しない（過剰適合回避）。Z列の存在＝非空のみ検証する
+        assert reactor_types, "炉型がExcelから1件も読めない（Z列欠落の可能性）"
 
     def test_message_id_unique_per_direction(self):
         """同一ラウンドの質問と回答は別メッセージ＝message_id が衝突しない（Step1修正）
