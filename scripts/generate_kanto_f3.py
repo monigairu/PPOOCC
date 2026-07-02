@@ -31,7 +31,7 @@ SCHEMA_DIR = KNOWLEDGE_DIR / "schema"
 EXCEL_NAME = "F3_knowledge_関東電力.xlsx"
 # 申請（転記結果_frameB_関東電力.xlsx の C5）と完全一致させる（Tool2a 自社フィルタは完全一致）。
 UTILITY = "関東電力株式会社"
-RT_COL = 26  # Z列（炉型）
+# 炉型のZ列書き込みは廃止（2026-07-02）：該当発電所から導出（plant_reactor_map.yaml）
 
 _R = make_f3_row  # alias
 
@@ -248,12 +248,14 @@ def _assign_varied_authors() -> None:
             i += 1
 
 
-def _write_row_from_B(ws, row_idx: int, values: list, reactor_type: str = "") -> None:
-    """データを B 列(=2)から書き、炉型は固定列 Z(=26) に書く（北の海電力F3と同レイアウト）。"""
+def _write_row_from_B(ws, row_idx: int, values: list) -> None:
+    """データを B 列(=2)から書く（北の海電力F3と同レイアウト）。
+
+    炉型はZ列に書かない（2026-07-02 設計確定）：ver5.3 様式に炉型列は存在せず、
+    該当発電所から導出する（data/knowledge/schema/plant_reactor_map.yaml）。
+    """
     for offset, val in enumerate(values):
         ws.cell(row=row_idx, column=2 + offset, value=val)
-    if reactor_type:
-        ws.cell(row=row_idx, column=RT_COL, value=reactor_type)
 
 
 def write_kanto_sheet(ws, title: str, data: list[tuple]) -> None:
@@ -262,9 +264,9 @@ def write_kanto_sheet(ws, title: str, data: list[tuple]) -> None:
     ws.cell(row=3, column=2, value="電力会社")
     ws.cell(row=3, column=3, value=UTILITY)  # C3 → utility_name
     _write_row_from_B(ws, 6, F3_HEADERS)
-    ws.cell(row=6, column=RT_COL, value="炉型")
-    for i, (row_data, reactor_type) in enumerate(data, start=7):
-        _write_row_from_B(ws, i, row_data, reactor_type)
+    # データタプルの reactor_type は導出方式移行に伴い書き込まない（発電所から導出）
+    for i, (row_data, _reactor_type) in enumerate(data, start=7):
+        _write_row_from_B(ws, i, row_data)
 
 
 def generate_excel() -> Path:

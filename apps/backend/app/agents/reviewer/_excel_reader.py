@@ -43,11 +43,42 @@ VER53_COLUMNS = (
 # ver5.3 本体列に加えて検索フィルタ・権限制御に使う付帯列（RAG_VERIFICATION.md §3-3）
 VER53_AUX_COLUMNS = (
     "utility_name",       # 電力会社（正規化前。正規化は ingest 側で適用）
-    "reactor_type",       # 炉型（BWR/PWR）
+    "reactor_type",       # 炉型（BWR/PWR）。様式に列は無く該当発電所から導出（plant_reactor_map.yaml）
     "sheet_name",         # 由来シート（KNI_1G_01 等＝提出タイミング分岐の後ろ盾）
     "message_direction",  # nuro / denryoku（flatten_qa が生成）
     "round",              # やりとり回数（flatten_qa が生成）
 )
+
+# 発電所→炉型の導出マップ（ドメイン知識・config）。様式のZ列は廃止（2026-07-02）
+_PLANT_REACTOR_MAP_PATH = _SCHEMA_DIR / "plant_reactor_map.yaml"
+_plant_reactor_map: dict[str, str] | None = None
+
+
+def _load_plant_reactor_map() -> dict[str, str]:
+    global _plant_reactor_map
+    if _plant_reactor_map is None:
+        if _PLANT_REACTOR_MAP_PATH.exists():
+            with open(_PLANT_REACTOR_MAP_PATH, encoding="utf-8") as f:
+                _plant_reactor_map = yaml.safe_load(f) or {}
+        else:
+            _plant_reactor_map = {}
+    return _plant_reactor_map
+
+
+def derive_reactor_type(plant_site: str, plant_unit: str = "") -> str:
+    """該当発電所（＋号機）から炉型を導出する。
+
+    正本Excel（ver5.3様式）に炉型の列は存在しないため、発電所→炉型の
+    ドメイン知識（plant_reactor_map.yaml）から導出する。
+    号機で炉型が異なる発電所は「発電所名/号機」キーが発電所名キーより優先。
+    マップに無い発電所は ""（炉型不明＝フィルタ対象外）。
+    """
+    if not plant_site:
+        return ""
+    reactor_map = _load_plant_reactor_map()
+    if plant_unit and f"{plant_site}/{plant_unit}" in reactor_map:
+        return str(reactor_map[f"{plant_site}/{plant_unit}"])
+    return str(reactor_map.get(plant_site, ""))
 
 
 def to_ver53_rows(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -163,6 +194,12 @@ def _read_excel_by_schema(
         # 由来シート（KNI_1G_01 等）。提出タイミング分岐・BigQuery平坦テーブルで使う
         if schema.get("sheet_name"):
             base["sheet_name"] = schema["sheet_name"]
+
+        # 炉型は様式の列ではなく該当発電所から導出（plant_reactor_map.yaml・ドメイン知識）
+        if base.get("plant_site") and not base.get("reactor_type"):
+            derived_rt = derive_reactor_type(base["plant_site"], base.get("plant_unit", ""))
+            if derived_rt:
+                base["reactor_type"] = derived_rt
 
         if qa_config and flatten_qa:
             start_col_idx = _col_letter_to_idx(qa_config["start_col"])
