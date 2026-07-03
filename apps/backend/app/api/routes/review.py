@@ -32,12 +32,14 @@ from apps.backend.app.api.models import (
     FeedbackRequest,
     FeedbackResponse,
     FeedbackSyncRequest,
+    MultiSheetReviewResponse,
     ReviewRequest,
     ReviewResponse,
     SessionSummary,
     UploadResponse,
 )
 from apps.backend.app.core.firestore_client import get_firestore_client
+from apps.backend.app.core.frame_config_loader import list_frame_sheets
 from apps.backend.app.core.settings import OUTPUT_DIR
 
 logger = logging.getLogger(__name__)
@@ -68,6 +70,63 @@ def _get_review_result_doc(db, review_id: str, session_id: str = ""):
     return next(docs, None)
 
 
+async def _execute_and_persist_review(
+    db,
+    session_id: str,
+    utility_name: str,
+    frame_name: str,
+    sheet_name: str,
+    mappings: list[dict],
+    mark_session_reviewed: bool = True,
+) -> ReviewResponse:
+    """AIレビューを実行し、結果をFirestoreに保存して ReviewResponse を返す共通処理。
+
+    run_review()（単一シート）と run_review_all_sheets()（複数シート一括）が共有する。
+    reviewer_agent.run_review() のI/Fは変更しない（呼び出すだけ）。
+    """
+    try:
+        review_items, retrieval_trace = await reviewer_agent.run_review(
+            session_id=session_id,
+            utility_name=utility_name,
+            mappings=mappings,
+            frame_name=frame_name,
+            sheet_name=sheet_name,
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"レビュー処理に失敗しました（{sheet_name}）: {e}")
+
+    review_id = str(uuid.uuid4())
+    reviewed_at = datetime.now(timezone.utc).isoformat()
+    summary = _extract_summary_from_items(review_items)
+
+    # レビュー結果をFirestoreのサブコレクションに保存
+    # retrieval_trace はデバッグ用途のため Firestore には保存しない
+    session_ref = db.collection("sessions").document(session_id)
+    review_ref = session_ref.collection("review_results").document(review_id)
+    review_ref.set({
+        "review_id": review_id,
+        "sheet_name": sheet_name,
+        "review_items": [item.model_dump() for item in review_items],
+        "summary": summary,
+        "reviewed_at": reviewed_at,
+        "feedbacks": [],
+        "total_count": len(review_items),
+        "decided_count": 0,
+    })
+
+    if mark_session_reviewed:
+        session_ref.update({"reviewed": True})
+
+    return ReviewResponse(
+        review_id=review_id,
+        review_items=review_items,
+        summary=summary,
+        reviewed_at=reviewed_at,
+        mappings=mappings,
+        retrieval_trace=retrieval_trace,
+    )
+
+
 @router.post("/review", response_model=ReviewResponse)
 async def run_review(request: ReviewRequest):
     """
@@ -90,45 +149,80 @@ async def run_review(request: ReviewRequest):
     if not mappings:
         raise HTTPException(status_code=400, detail="セッションに転記データがありません")
 
-    # AIレビュー実行（Agentic RAG: 5 Tool 固定順実行）
-    try:
-        review_items, retrieval_trace = await reviewer_agent.run_review(
+    return await _execute_and_persist_review(
+        db,
+        session_id=request.session_id,
+        utility_name=request.utility_name,
+        frame_name=request.frame_name,
+        sheet_name=request.sheet_name,
+        mappings=mappings,
+    )
+
+
+@router.post("/review/all-sheets", response_model=MultiSheetReviewResponse)
+async def run_review_all_sheets(request: ReviewRequest):
+    """
+    frame配下の全シート（例: MRC1・MRC2）を一括でAIレビューし、シート名ごとの結果を返す。
+
+    - request.sheet_name のシートは、既存の /review と同じくFirestore保存済みmappingsを使う。
+    - それ以外のシートは、result-layoutと同じ命名の転記済みExcel（result_{frame}_{session_id}.xlsx）
+      から reconstruct_mappings_from_excel() で都度復元する（result_reader.pyはPhase 1から不変）。
+    - シートのExcelが無い/読めない場合はそのシートだけスキップする（全体は失敗させない）。
+    """
+    db = get_firestore_client()
+
+    session_ref = db.collection("sessions").document(request.session_id)
+    session_doc = session_ref.get()
+    if not session_doc.exists:
+        raise HTTPException(status_code=404, detail=f"セッションが見つかりません: {request.session_id}")
+
+    session_data = session_doc.to_dict()
+    primary_sheet = request.sheet_name or session_data.get("sheet_name", "MRC1")
+    primary_mappings: list[dict] = session_data.get("mappings", [])
+    if not primary_mappings:
+        raise HTTPException(status_code=400, detail="セッションに転記データがありません")
+
+    sheet_names = list_frame_sheets(request.frame_name) or [primary_sheet]
+
+    safe_frame = Path(request.frame_name).name
+    safe_session = Path(request.session_id).name
+    result_path = OUTPUT_DIR / f"result_{safe_frame}_{safe_session}.xlsx"
+
+    results: dict[str, ReviewResponse] = {}
+    skipped: list[str] = []
+
+    for sheet_name in sheet_names:
+        if sheet_name == primary_sheet:
+            mappings = primary_mappings
+        elif result_path.exists():
+            try:
+                mappings = reconstruct_mappings_from_excel(result_path, safe_frame, sheet_name)
+            except Exception as e:
+                logger.warning("シート %s のmappings復元に失敗、スキップ: %s", sheet_name, e)
+                skipped.append(sheet_name)
+                continue
+            if not mappings:
+                skipped.append(sheet_name)
+                continue
+        else:
+            # 転記済みExcelが無い（旧セッション等）＝そのシートは復元不能なのでスキップ
+            skipped.append(sheet_name)
+            continue
+
+        results[sheet_name] = await _execute_and_persist_review(
+            db,
             session_id=request.session_id,
             utility_name=request.utility_name,
-            mappings=mappings,
             frame_name=request.frame_name,
-            sheet_name=request.sheet_name,
+            sheet_name=sheet_name,
+            mappings=mappings,
+            mark_session_reviewed=(sheet_name == primary_sheet),
         )
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"レビュー処理に失敗しました: {e}")
 
-    review_id = str(uuid.uuid4())
-    reviewed_at = datetime.now(timezone.utc).isoformat()
-    summary = _extract_summary_from_items(review_items)
+    if not results:
+        raise HTTPException(status_code=400, detail="レビュー可能なシートがありませんでした")
 
-    # レビュー結果をFirestoreのサブコレクションに保存
-    # retrieval_trace はデバッグ用途のため Firestore には保存しない
-    review_ref = session_ref.collection("review_results").document(review_id)
-    review_ref.set({
-        "review_id": review_id,
-        "review_items": [item.model_dump() for item in review_items],
-        "summary": summary,
-        "reviewed_at": reviewed_at,
-        "feedbacks": [],
-        "total_count": len(review_items),
-        "decided_count": 0,
-    })
-
-    session_ref.update({"reviewed": True})
-
-    return ReviewResponse(
-        review_id=review_id,
-        review_items=review_items,
-        summary=summary,
-        reviewed_at=reviewed_at,
-        mappings=mappings,
-        retrieval_trace=retrieval_trace,
-    )
+    return MultiSheetReviewResponse(sheets=results, skipped_sheets=skipped)
 
 
 @router.post("/review/upload", response_model=UploadResponse)
@@ -315,6 +409,74 @@ async def list_sessions(include_history: bool = Query(False)):
         )
 
     return sessions
+
+
+@router.get("/review/{session_id}/results-by-sheet", response_model=MultiSheetReviewResponse)
+async def get_latest_review_results_by_sheet(
+    session_id: str,
+    frame_name: str = Query("frameB", pattern=r"^[a-zA-Z0-9_\-]+$"),
+):
+    """
+    セッションの各シート（MRC1・MRC2等）について、直近のレビュー結果を1件ずつ返す（ページ復元用）。
+
+    run_review_all_sheets() で保存された sheet_name 付き review_results から、
+    シートごとに reviewed_at が最新の1件を選ぶ（複合インデックス不要：order_byのみ・絞り込みはPython側）。
+    """
+    db = get_firestore_client()
+    session_ref = db.collection("sessions").document(session_id)
+    session_doc = session_ref.get()
+    if not session_doc.exists:
+        raise HTTPException(status_code=404, detail=f"セッションが見つかりません: {session_id}")
+
+    session_data = session_doc.to_dict()
+    primary_sheet = session_data.get("sheet_name", "MRC1")
+    primary_mappings: list[dict] = session_data.get("mappings", [])
+
+    docs = list(
+        session_ref.collection("review_results")
+        .order_by("reviewed_at", direction=firestore.Query.DESCENDING)
+        .limit(50)
+        .stream()
+    )
+    latest_by_sheet: dict[str, dict] = {}
+    for doc in docs:
+        data = doc.to_dict()
+        # 旧データ（sheet_name未保存）は primary_sheet のレビューとみなす
+        sheet_name = data.get("sheet_name") or primary_sheet
+        if sheet_name not in latest_by_sheet:
+            latest_by_sheet[sheet_name] = data
+
+    if not latest_by_sheet:
+        raise HTTPException(status_code=404, detail="レビュー結果が見つかりません")
+
+    safe_frame = Path(frame_name).name
+    safe_session = Path(session_id).name
+    result_path = OUTPUT_DIR / f"result_{safe_frame}_{safe_session}.xlsx"
+
+    sheets: dict[str, ReviewResponse] = {}
+    for sheet_name, data in latest_by_sheet.items():
+        if sheet_name == primary_sheet:
+            mappings = primary_mappings
+        elif result_path.exists():
+            try:
+                mappings = reconstruct_mappings_from_excel(result_path, safe_frame, sheet_name)
+            except Exception as e:
+                logger.warning("復元時のシート %s のmappings再構築に失敗: %s", sheet_name, e)
+                mappings = []
+        else:
+            mappings = []
+
+        sheets[sheet_name] = ReviewResponse(
+            review_id=data.get("review_id", ""),
+            review_items=data.get("review_items", []),
+            summary=data.get("summary", ""),
+            reviewed_at=data.get("reviewed_at", ""),
+            mappings=mappings,
+            retrieval_trace=[],
+            feedbacks=data.get("feedbacks", []),
+        )
+
+    return MultiSheetReviewResponse(sheets=sheets)
 
 
 @router.get("/review/{session_id}/result")

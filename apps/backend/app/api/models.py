@@ -88,6 +88,13 @@ class ReviewResponse(BaseModel):
     reviewed_at: str
     mappings: list[dict] = []           # 転記結果（グリッド表示用）
     retrieval_trace: list[dict] = []    # 各ToolのRAG取得ログ（RAG詳細パネル用）
+    feedbacks: list[dict] = []          # 承諾/棄却フィードバック（復元用。新規実行時は空）
+
+
+class MultiSheetReviewResponse(BaseModel):
+    """複数シート一括レビューのレスポンス（例: MRC1・MRC2を1回のリクエストでレビュー）"""
+    sheets: dict[str, ReviewResponse]   # {"MRC1": ReviewResponse, "MRC2": ReviewResponse, ...}
+    skipped_sheets: list[str] = []      # 転記データが無くレビューできなかったシート名
 
 
 class FeedbackRequest(BaseModel):
