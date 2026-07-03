@@ -379,6 +379,43 @@ function ReviewGridView({ template, templateError, mappings, reviewItems, select
   );
 }
 
+// ── 下部: Excel風シートタブバー（MRC1/MRC2切替） ────────────────────────────
+function SheetTabBar({ sheetNames, activeSheet, onSwitch, reviewBySheet }) {
+  if (sheetNames.length === 0) return null;
+  return (
+    <div style={{
+      display: "flex", alignItems: "stretch", gap: 2,
+      borderTop: `1px solid ${T.border}`, background: T.surface,
+      padding: "0 10px", flexShrink: 0, height: 32,
+    }}>
+      {sheetNames.map((sheetName) => {
+        const isActive = sheetName === activeSheet;
+        const count = reviewBySheet[sheetName]?.reviewItems?.length || 0;
+        return (
+          <button
+            key={sheetName}
+            onClick={() => onSwitch(sheetName)}
+            style={{
+              padding: "0 18px",
+              marginTop: -1,
+              border: `1px solid ${isActive ? T.teal : "transparent"}`,
+              borderTop: isActive ? `1px solid ${T.surface}` : "1px solid transparent",
+              borderRadius: "0 0 6px 6px",
+              background: isActive ? T.tealSoft : "transparent",
+              color: isActive ? T.tealLight : T.textMuted,
+              fontSize: 12, fontWeight: isActive ? 700 : 400,
+              cursor: "pointer", fontFamily: "inherit",
+              transition: "all 0.15s",
+            }}
+          >
+            {sheetName}{count > 0 && ` (${count})`}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
 function LegendDot({ color, label }) {
   return (
     <span style={{ display: "flex", alignItems: "center", gap: 5 }}>
@@ -737,6 +774,30 @@ export default function ReviewPage() {
   const [error, setError] = useState("");
   const [retrievalTrace, setRetrievalTrace] = useState([]);
 
+  // MRC1/MRC2 シート切替: シートごとのレビュー結果一式をメモリにキャッシュしておき、
+  // タブ切替時は再フェッチせず上記フラットstateへ差し替えるだけにする
+  const [reviewBySheet, setReviewBySheet] = useState({});
+  const [activeSheet, setActiveSheet] = useState("MRC1");
+
+  // reviewBySheet[sheetName] の内容をフラットstate（画面表示用）へ反映する
+  const _applySheetToFlatState = (sheetName, cache) => {
+    const s = cache[sheetName];
+    if (!s) return;
+    setActiveSheet(sheetName);
+    setReviewId(s.reviewId);
+    setReviewItems(s.reviewItems);
+    setSessionMappings(s.sessionMappings);
+    setSummary(s.summary);
+    setRetrievalTrace(s.retrievalTrace);
+    setFeedbackMap(s.feedbackMap);
+    if (s.template) setTemplate(s.template);
+  };
+
+  const handleSwitchSheet = (sheetName) => {
+    if (sheetName === activeSheet) return;
+    _applySheetToFlatState(sheetName, reviewBySheet);
+  };
+
   // セッション一覧取得（新エンドポイント: review_status + progress 付き）
   const fetchSessions = () => {
     setIsLoadingSessions(true);
@@ -746,30 +807,46 @@ export default function ReviewPage() {
       .catch((e) => { setError(String(e)); setIsLoadingSessions(false); return []; });
   };
 
-  // 最新レビュー結果を復元する共通処理
-  const _restoreReviewResult = (sessionId, frameName, sheetName) => {
-    fetch(`${API_BASE}/review/${sessionId}/result`)
-      .then((r) => r.ok ? r.json() : null)
-      .then((result) => {
-        if (!result) return;
-        setReviewId(result.review_id);
-        setReviewItems(result.review_items || []);
-        setSessionMappings(result.mappings || []);
-        setSummary(result.summary || "");
+  // 最新レビュー結果をシートごとに復元する共通処理（MRC1/MRC2 それぞれの最新結果をキャッシュに積む）
+  const _restoreReviewResult = async (sessionId, frameName, sheetName) => {
+    const fn = frameName || "frameB";
+    const res = await fetch(`${API_BASE}/review/${sessionId}/results-by-sheet?frame_name=${fn}`);
+    if (!res.ok) return;
+    const data = await res.json();
+    const sheets = data.sheets || {};
+    const sheetNames = Object.keys(sheets);
+    if (sheetNames.length === 0) return;
 
-        // feedbackMap を feedbacks の decision フィールドから正確に復元する
-        const restoredMap = {};
-        for (const f of result.feedbacks || []) {
-          restoredMap[f.item_id] = f.decision === "accept" ? "accepted" : "rejected";
-        }
-        setFeedbackMap(restoredMap);
+    // 各シートのレイアウトを並列取得してからキャッシュへ積む（タブ切替を再フェッチ無しにするため）
+    const layouts = await Promise.all(
+      sheetNames.map((sn) =>
+        fetch(`${API_BASE}/result-layout/${sessionId}?frame_name=${fn}&sheet_name=${sn}`)
+          .then((r) => (r.ok ? r.json() : null))
+          .catch(() => null)
+      )
+    );
 
-        fetch(`${API_BASE}/result-layout/${sessionId}?frame_name=${frameName || "frameB"}&sheet_name=${sheetName || "MRC1"}`)
-          .then((r) => r.ok ? r.json() : null)
-          .then((layout) => { if (layout) setTemplate(layout); })
-          .catch(() => {});
-      })
-      .catch(() => {});
+    const cache = {};
+    sheetNames.forEach((sn, i) => {
+      const result = sheets[sn];
+      const restoredMap = {};
+      for (const f of result.feedbacks || []) {
+        restoredMap[f.item_id] = f.decision === "accept" ? "accepted" : "rejected";
+      }
+      cache[sn] = {
+        reviewId: result.review_id,
+        reviewItems: result.review_items || [],
+        sessionMappings: result.mappings || [],
+        summary: result.summary || "",
+        retrievalTrace: [],
+        feedbackMap: restoredMap,
+        template: layouts[i] || null,
+      };
+    });
+
+    setReviewBySheet(cache);
+    const initial = sheetNames.includes(sheetName) ? sheetName : sheetNames[0];
+    _applySheetToFlatState(initial, cache);
   };
 
   // 初回マウント: セッション取得 + 前回セッション復元
@@ -799,8 +876,10 @@ export default function ReviewPage() {
     setSelectedReviewItem(null);
     setTemplate(null);
     setTemplateError(null);
+    setReviewBySheet({});
 
     const sheet = session.sheet_name || "MRC1";
+    setActiveSheet(sheet);
     fetch(`${API_BASE}/template?sheet_name=${sheet}`)
       .then((r) => r.ok ? r.json() : Promise.reject(`HTTP ${r.status}`))
       .then(setTemplate)
@@ -816,7 +895,7 @@ export default function ReviewPage() {
     }
   };
 
-  // AIレビュー実行
+  // AIレビュー実行（MRC1/MRC2など frame配下の全シートを1回で実行し、タブ切替で両方見られるようにする）
   const handleStartReview = async () => {
     if (!selectedSession) return;
     setIsReviewing(true);
@@ -826,15 +905,18 @@ export default function ReviewPage() {
     setFeedbackMap({});
     setRetrievalTrace([]);
 
+    const frameName = selectedSession.frame_name || "frameB";
+    const primarySheet = selectedSession.sheet_name || "MRC1";
+
     try {
-      const res = await fetch(`${API_BASE}/review`, {
+      const res = await fetch(`${API_BASE}/review/all-sheets`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           session_id: selectedSession.session_id,
           utility_name: selectedSession.utility_name,
-          sheet_name: selectedSession.sheet_name || "MRC1",
-          frame_name: selectedSession.frame_name || "frameB",
+          sheet_name: primarySheet,
+          frame_name: frameName,
         }),
       });
       if (!res.ok) {
@@ -842,18 +924,40 @@ export default function ReviewPage() {
         throw new Error(err.detail || "レビューに失敗しました");
       }
       const data = await res.json();
-      setReviewId(data.review_id);
-      setReviewItems(data.review_items || []);
-      setSessionMappings(data.mappings || []);
-      setSummary(data.summary || "");
-      setRetrievalTrace(data.retrieval_trace || []);
+      const sheets = data.sheets || {};
+      const sheetNames = Object.keys(sheets);
+      if (sheetNames.length === 0) throw new Error("レビュー可能なシートがありませんでした");
 
-      // 転記済み様式レイアウトを取得（指摘セルの実際の値を表示するため）
-      fetch(`${API_BASE}/result-layout/${selectedSession.session_id}?frame_name=${selectedSession.frame_name || "frameB"}&sheet_name=${selectedSession.sheet_name || "MRC1"}`)
-        .then((r) => r.ok ? r.json() : null)
-        .then((layout) => { if (layout) setTemplate(layout); })
-        .catch(() => {});
+      // 各シートのレイアウトを並列取得（指摘セルの実際の値を表示するため）→ タブ切替は再フェッチ無しにする
+      const layouts = await Promise.all(
+        sheetNames.map((sn) =>
+          fetch(`${API_BASE}/result-layout/${selectedSession.session_id}?frame_name=${frameName}&sheet_name=${sn}`)
+            .then((r) => (r.ok ? r.json() : null))
+            .catch(() => null)
+        )
+      );
 
+      const cache = {};
+      sheetNames.forEach((sn, i) => {
+        const result = sheets[sn];
+        cache[sn] = {
+          reviewId: result.review_id,
+          reviewItems: result.review_items || [],
+          sessionMappings: result.mappings || [],
+          summary: result.summary || "",
+          retrievalTrace: result.retrieval_trace || [],
+          feedbackMap: {},
+          template: layouts[i] || null,
+        };
+      });
+
+      setReviewBySheet(cache);
+      const initial = sheetNames.includes(primarySheet) ? primarySheet : sheetNames[0];
+      _applySheetToFlatState(initial, cache);
+
+      if (data.skipped_sheets && data.skipped_sheets.length > 0) {
+        setError(`一部シートはレビューできませんでした（転記データなし）: ${data.skipped_sheets.join(", ")}`);
+      }
     } catch (e) {
       setError(e.message);
     } finally {
@@ -924,10 +1028,20 @@ export default function ReviewPage() {
     if (item.cell_address) setSelectedCell({ cell_address: item.cell_address, field_name: item.field_name, value: "", reasoning: "" });
   };
 
+  // reviewBySheet[activeSheet].feedbackMap をフラットstateと同期する
+  // （タブ切替時に上書きされるキャッシュ側へも反映しておかないと、切替→復帰で判定が消える）
+  const _syncFeedbackToSheetCache = (nextFeedbackMap) => {
+    setReviewBySheet((prev) => {
+      if (!prev[activeSheet]) return prev;
+      return { ...prev, [activeSheet]: { ...prev[activeSheet], feedbackMap: nextFeedbackMap } };
+    });
+  };
+
   // 承諾/棄却
   const submitFeedback = async (itemId, decision) => {
     const newFeedbackMap = { ...feedbackMap, [itemId]: decision === "accept" ? "accepted" : "rejected" };
     setFeedbackMap(newFeedbackMap);
+    _syncFeedbackToSheetCache(newFeedbackMap);
     if (!reviewId) return;
     try {
       await fetch(`${API_BASE}/review/${reviewId}/feedback`, {
@@ -950,13 +1064,19 @@ export default function ReviewPage() {
     setIsSaving(true);
     setError("");
     try {
-      // Step1: 現在の feedbackMap を Firestore に一括同期（リアルタイム保存の補完）
-      if (reviewId && Object.keys(feedbackMap).length > 0) {
-        const feedbacksToSync = Object.entries(feedbackMap).map(([itemId, status]) => ({
+      // Step1: 全シート分の feedbackMap を Firestore に一括同期（リアルタイム保存の補完）
+      // reviewBySheet が空（旧フロー・単一シートのみ）の場合はアクティブシートのみで代替する
+      const sheetsToSync = Object.keys(reviewBySheet).length > 0
+        ? reviewBySheet
+        : { [activeSheet]: { reviewId, feedbackMap } };
+
+      for (const sheet of Object.values(sheetsToSync)) {
+        if (!sheet.reviewId || Object.keys(sheet.feedbackMap || {}).length === 0) continue;
+        const feedbacksToSync = Object.entries(sheet.feedbackMap).map(([itemId, status]) => ({
           item_id: itemId,
           decision: status === "accepted" ? "accept" : "reject",
         }));
-        const syncRes = await fetch(`${API_BASE}/review/${reviewId}/feedbacks/sync`, {
+        const syncRes = await fetch(`${API_BASE}/review/${sheet.reviewId}/feedbacks/sync`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ feedbacks: feedbacksToSync, session_id: selectedSession?.session_id || "" }),
@@ -981,6 +1101,7 @@ export default function ReviewPage() {
     setFeedbackMap((prev) => {
       const next = { ...prev };
       delete next[itemId];
+      _syncFeedbackToSheetCache(next);
       return next;
     });
     if (!reviewId) return;
@@ -1039,7 +1160,7 @@ export default function ReviewPage() {
             <span>様式プレビュー</span>
             {selectedSession && (
               <span style={{ fontSize: 12, color: T.tealLight, fontWeight: 400, textTransform: "none", letterSpacing: 0 }}>
-                {selectedSession.utility_name} — {selectedSession.sheet_name}
+                {selectedSession.utility_name}
               </span>
             )}
           </div>
@@ -1069,6 +1190,18 @@ export default function ReviewPage() {
             onReject={(id) => submitFeedback(id, "reject")}
             onUndo={handleUndo}
             feedbackMap={feedbackMap}
+          />
+
+          {/* Excel風シートタブ（レビュー結果が無い間は選択中シートのみ表示） */}
+          <SheetTabBar
+            sheetNames={
+              Object.keys(reviewBySheet).length > 0
+                ? Object.keys(reviewBySheet).sort()
+                : selectedSession ? [activeSheet] : []
+            }
+            activeSheet={activeSheet}
+            onSwitch={handleSwitchSheet}
+            reviewBySheet={reviewBySheet}
           />
         </div>
 

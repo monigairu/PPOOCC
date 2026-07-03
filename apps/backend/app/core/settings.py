@@ -17,7 +17,7 @@ _BASE = Path("data/form_generation")
 OUTPUT_DIR    = _BASE / "output"
 UPLOAD_DIR    = _BASE / "input" / "uploaded"
 CACHE_DIR     = _BASE / "cache"
-TEMPLATE_PATH = _BASE / "input" / "templates" / "frameB_MRC.xlsx"
+TEMPLATE_PATH = Path("config/templates/frameB_MRC.xlsx")
 
 FRAMES_DIR = Path("frames")
 

@@ -12,6 +12,26 @@ from pathlib import Path
 _CONFIG_DIRS = (Path("config"), Path("frames"))
 
 
+def list_frame_sheets(frame_name: str) -> list[str]:
+    """
+    指定フレームに定義されているシート名の一覧を返す（config/{frame_name}/*.yaml から発見）。
+
+    MRC1/MRC2 のように複数シートを持つフレームで、レビュー画面のシート切替タブなどに使う。
+
+    Args:
+        frame_name: 様式名（例: "frameB"）
+
+    Returns:
+        シート名のリスト（アルファベット順）。フレームが見つからなければ空リスト。
+    """
+    sheets: set[str] = set()
+    for d in _CONFIG_DIRS:
+        frame_dir = d / frame_name
+        if frame_dir.is_dir():
+            sheets.update(p.stem for p in frame_dir.glob("*.yaml"))
+    return sorted(sheets)
+
+
 def load_frame_config(frame_name: str, sheet_name: str) -> dict:
     """
     様式定義YAMLを読み込む。
