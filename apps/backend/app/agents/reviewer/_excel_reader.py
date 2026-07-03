@@ -147,6 +147,65 @@ def to_ver53_rows(
     return rows
 
 
+def _apply_bq_field_defaults(knowledge_type: str, rows: list[dict[str, Any]]) -> None:
+    """knowledge_type ごとの ingest 時フィールド補正（検索側と一貫させる）。"""
+    # 循環import回避のため関数内import（knowledge_loader は検索バックエンドに依存する）
+    from apps.backend.app.agents.reviewer.knowledge_loader import normalize_utility
+
+    if knowledge_type == "f3":
+        # 会社名は検索側（load_f3）・直接投入（_build_document）と同じ正規化で表記ゆれを吸収
+        for row in rows:
+            row["utility_name"] = normalize_utility(row["utility_name"])
+    elif knowledge_type == "f2":
+        # F2 は NuRO のみ参照可。load_f2 が caller_role_required=NuRO で絞るため定数を付与
+        for row in rows:
+            row["caller_role_required"] = "NuRO"
+
+
+def excel_to_bq_input(
+    records: list[dict[str, Any]],
+    knowledge_type: str,
+) -> list[dict[str, Any]]:
+    """Excel読み取り結果を受け取って BigQuery のインプットに加工する親玉関数。
+
+    read_all_f2()/read_all_f3() が返した平坦レコード（1メッセージ=1行）を、
+    BigQuery ロード（→ Agent Search 索引）へそのまま渡せる行リストに変換する。
+
+    中身は次の3段（各処理の詳細はそれぞれの関数を参照）:
+      1. to_ver53_rows()            正準列契約 VER53_SCHEMA への射影
+      2. _apply_bq_field_defaults() knowledge_type ごとの検索用フィールド補正
+      3. message_id 検証            空の行があれば ValueError（索引の id_field に使えない）
+
+    Args:
+        records: read_all_f2()/read_all_f3() の戻り値（平坦レコードのリスト）
+        knowledge_type: "f2" または "f3"
+
+    Returns:
+        BigQuery へロード可能な ver5.3 行（dict）のリスト。
+        例: [{"id": "F3-001", "message_id": "F3-001_01", "message_content": "...", ...}, ...]
+
+    Raises:
+        ValueError: message_id が空の行がある場合（件数をメッセージに含む）
+
+    使用例:
+        records = read_all_f3()
+        rows = excel_to_bq_input(records, "f3")   # → そのまま BigQuery へロードできる
+    """
+    assert isinstance(records, list), "records は read_all_f2()/read_all_f3() の戻り値（list）を渡す"
+    assert knowledge_type in ("f2", "f3"), f"knowledge_type は 'f2' か 'f3'（実際: {knowledge_type!r}）"
+
+    rows = to_ver53_rows(records, knowledge_type)
+    _apply_bq_field_defaults(knowledge_type, rows)
+
+    no_id = [r for r in rows if not r["message_id"]]
+    if no_id:
+        raise ValueError(
+            f"message_id が空の行が {len(no_id)} 件あります（flatten_qa=False のスキーマ？）。"
+            "Agent Search 索引の id_field に使えないため中止します"
+        )
+    return rows
+
+
 def _col_letter_to_idx(col: str) -> int:
     result = 0
     for ch in col.upper():
