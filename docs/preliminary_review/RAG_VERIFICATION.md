@@ -21,7 +21,7 @@
 
 ---
 
-## 1. 検証で確定した設計判断（#1〜8・10〜12＝実装済み・CONFIRMED／#9＝採用方針・未実装）
+## 1. 検証で確定した設計判断（#1〜8・10〜13＝実装済み・CONFIRMED／#9＝採用方針・未実装）
 
 | # | 判断 | 要点 | 根拠/場所 |
 |---|---|---|---|
@@ -34,9 +34,10 @@
 | 7 | **検索クエリの一般化** | クエリを申請自身の **費目＋工事件名** で構成（観点語ハードコードなし）。Tool2a surfacing 10→16件 | `build_search_query`／`reviewer_agent.py` |
 | 8 | **config/ 移行追従（レビュー系）** | frame config を `config/` へ移行。`load_frame_config` は config/ 優先・frames/ 後方互換 | `frame_config_loader.py` |
 | 9 | **Reranking 採用方針** | Agent Search の Ranking API（semantic-ranker）を**PoC採用**（§3-2）。実装は `knowledge_loader._search()` 後段（未実装・§2） | §3 |
-| 10 | **message_id の一意化**（2026-07-02） | 旧形式 `{id}_{round}` は同一ラウンドの質問/回答で衝突し、doc_id 上書きで**271→158件（42%）が silently 消失**していた。`{id}_{round}_{direction}` に修正（下流利用なし・ver5.3「1メッセージ=1行」に整合） | `_excel_reader.py`／一意性テスト |
+| 10 | **message_id の一意化**（2026-07-03 公式準拠に確定） | 旧形式 `{id}_{round}` は同一ラウンドの質問/回答で衝突し、doc_id 上書きで **silently 消失**（F3 271→158件・F2 86→44件＝各約42-49%）。**公式 ver5.3 出力用シート準拠の通し連番 `{id}_{seq:02d}`**（読み順で採番・方向は別カラム保持）に統一。F2/F3共通・下流利用なし | `_excel_reader.py`／一意性テスト |
 | 11 | **炉型は発電所から導出（Z列廃止が正）**（2026-07-03 確定） | ver5.3様式に炉型列は**存在しない**（Z列削除は意図的・ユーザー確認済み）。炉型は該当発電所→炉型のドメイン知識 `plant_reactor_map.yaml`（config・号機上書きキー対応）から**平坦化時に導出**。旧Z列の行単位値は発電所と不整合な合成ノイズだった（網走1号機にPWR/BWR混在）。導出により発電所・号機単位の一貫性が構造的に保証される（一貫性テスト追加） | `_excel_reader.py`／`plant_reactor_map.yaml`／`test_f3_reactor_type_derived_and_consistent` |
 | 12 | **BigQuery→Agent Search 経路の本採用**（2026-07-02・Step1） | `Excel→平坦化(ver5.3)→BigQuery→Agent Search索引` を実装し、マトリクス全PASSで本採用（measure-first・二系統フォールバック不要だった）。`_to_record` に cost_category→fee_type 互換エイリアス（relevance guard の grounding降格防止） | `ingest_knowledge.py`／`knowledge_loader.py` |
+| 13 | **F2 も BigQuery平坦化に統一**（2026-07-03） | F3と同じ `Excel→平坦化(ver5.3)→BigQuery(f2_flat_ver53)→Agent Search索引(nuro-f2-bq-knowledge)`。`to_ver53_rows` を knowledge_type 駆動に一般化（`VER53_SCHEMA` レジストリ・F2固有列＝業務カテゴリ/事象概要/判断基準等）。F2 も message_id 衝突で 86→44件消失していたのが復活。`caller_role_required=NuRO` を定数付帯列としてingest時付与（load_f2 の権限フィルタ用） | `_excel_reader.py`／`ingest_knowledge.py`／`settings.py` |
 
 **横断原則（最重要・誤実装防止）**：チェックの拠り所は「**様式定義（config）＋普遍的算術**」のみ。特定費目/見積書
 構造/検証ケースに**ハードコード・過剰適合しない**。`run_review` / `knowledge_loader` の I/F は不変。
@@ -44,9 +45,9 @@
 **データストアの役割**（詳細・DB方針は §3-3）：
 - **Firestore**＝レビュー中の運用状態（リアルタイム）。
 - **Agent Search(F3)**＝検索で根拠を引く本体／承諾ナレッジの還流先（将来）。
-- **BigQuery＝2用途**：①F3知識の置き場（PoC採用・Agent Searchが索引）／②採否結果の分析・蓄積（検索しない・将来）。
-- ※①は**実装済み（2026-07-02・Step1）**：`Excel→平坦化(ver5.3)→BigQuery→Agent Search索引` が現行経路（§1-12）。
-  旧直接投入データストア（nuro-f3-knowledge）は比較基準として残置・検索には未使用。
+- **BigQuery＝2用途**：①F2/F3知識の置き場（PoC採用・Agent Searchが索引）／②採否結果の分析・蓄積（検索しない・将来）。
+- ※①は**実装済み（2026-07-02〜03・Step1）**：`Excel→平坦化(ver5.3)→BigQuery→Agent Search索引` が **F2/F3両方**の現行経路（§1-12/13）。
+  旧直接投入データストア（nuro-f2-knowledge／nuro-f3-knowledge）は比較基準として残置・検索には未使用。
 
 ---
 

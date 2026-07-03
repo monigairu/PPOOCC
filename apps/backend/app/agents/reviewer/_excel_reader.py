@@ -23,9 +23,11 @@ _SCHEMA_DIR = _KNOWLEDGE_DIR / "schema"
 # ver5.3 平坦形式（1メッセージ=1行）の正準列（REQUIREMENTS.md §0-7 R1）。
 # BigQuery 平坦テーブル・Agent Search 索引のスキーマ契約として使う。
 # 各キーは schema YAML の fixed_columns キーおよび flatten_qa の生成キーと一致させる。
-VER53_COLUMNS = (
+#
+# F3（電力別ナレッジ・新様式 ver5.3）
+F3_VER53_COLUMNS = (
     "id",                 # ID
-    "message_id",         # メッセージID（flatten_qa が生成: {id}_{round:02d}）
+    "message_id",         # メッセージID（flatten_qa が生成: {id}_{seq:02d}）
     "start_date",         # 起票日
     "dept_group",         # 起票者所属G
     "author",             # 起票者
@@ -40,14 +42,56 @@ VER53_COLUMNS = (
     "message_content",    # メッセージ内容（検索対象テキスト・flatten_qa が生成）
 )
 
-# ver5.3 本体列に加えて検索フィルタ・権限制御に使う付帯列（RAG_VERIFICATION.md §3-3）
-VER53_AUX_COLUMNS = (
+# F3 本体列に加えて検索フィルタ・権限制御に使う付帯列（RAG_VERIFICATION.md §3-3）
+F3_VER53_AUX_COLUMNS = (
     "utility_name",       # 電力会社（正規化前。正規化は ingest 側で適用）
     "reactor_type",       # 炉型（BWR/PWR）。様式に列は無く該当発電所から導出（plant_reactor_map.yaml）
     "sheet_name",         # 由来シート（KNI_1G_01 等＝提出タイミング分岐の後ろ盾）
     "message_direction",  # nuro / denryoku（flatten_qa が生成）
     "round",              # やりとり回数（flatten_qa が生成）
 )
+
+# F2（NuRO内共有の問合せ・知見ナレッジ・新様式 ver5.3）。画像の出力用シート列順に準拠。
+F2_VER53_COLUMNS = (
+    "id",                  # ID
+    "message_id",          # メッセージID（flatten_qa が生成）
+    "start_date",          # 起票日
+    "category",            # 区分
+    "dept_group",          # 起票者所属G
+    "author",              # 起票者
+    "business_category",   # 業務カテゴリ
+    "related_group",       # 関連グループ名
+    "ref_knowledge_id",    # 参照先ナレッジID
+    "from_party",          # From
+    "to_party",            # To
+    "reference_url",       # 該当資料
+    "priority",            # 優先度
+    "status",              # ステータス
+    "title",               # タイトル
+    "contact_medium",      # 連絡媒体
+    "related_material_1",  # 関連資料①
+    "related_material_2",  # 関連資料②
+    "related_material_3",  # 関連資料③
+    "phenomenon_summary",  # 事象概要
+    "judgment_basis",      # 判断基準
+    "response_result",     # 対応結果
+    "message_content",     # メッセージ内容（検索対象テキスト・flatten_qa が生成）
+)
+
+# F2 付帯列。F2 は NuRO 内共有のため電力会社・炉型は持たない。
+# caller_role_required は権限フィルタ（load_f2 が caller_role_required=NuRO で絞る）用の定数列。
+F2_VER53_AUX_COLUMNS = (
+    "sheet_name",           # 由来シート（KNS_1G 等）
+    "message_direction",    # question / answer（flatten_qa が生成）
+    "round",                # やりとり回数（flatten_qa が生成）
+    "caller_role_required", # 権限フィルタ用（F2 は常に "NuRO"・ingest で付与）
+)
+
+# knowledge_type → (本体列, 付帯列) のレジストリ。to_ver53_rows / ingest / 索引が参照する単一の契約。
+VER53_SCHEMA: dict[str, tuple[tuple[str, ...], tuple[str, ...]]] = {
+    "f3": (F3_VER53_COLUMNS, F3_VER53_AUX_COLUMNS),
+    "f2": (F2_VER53_COLUMNS, F2_VER53_AUX_COLUMNS),
+}
 
 # 発電所→炉型の導出マップ（ドメイン知識・config）。様式のZ列は廃止（2026-07-02）
 _PLANT_REACTOR_MAP_PATH = _SCHEMA_DIR / "plant_reactor_map.yaml"
@@ -81,18 +125,22 @@ def derive_reactor_type(plant_site: str, plant_unit: str = "") -> str:
     return str(reactor_map.get(plant_site, ""))
 
 
-def to_ver53_rows(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def to_ver53_rows(
+    records: list[dict[str, Any]],
+    knowledge_type: str = "f3",
+) -> list[dict[str, Any]]:
     """
-    read_all_f3() の平坦レコードを ver5.3 の正準列＋付帯列に射影する。
+    read_all_f2()/read_all_f3() の平坦レコードを ver5.3 の正準列＋付帯列に射影する。
 
-    - VER53_COLUMNS / VER53_AUX_COLUMNS にあるキーだけを残す（余分なキーは落とす）
+    - knowledge_type（"f2"/"f3"）に対応する列だけを残す（余分なキーは落とす）
     - 欠けているキーは "" で埋める（round のみ 0）
     → BigQuery ロード・Agent Search 索引が常に同一スキーマの行を受け取れる。
     """
+    columns, aux_columns = VER53_SCHEMA[knowledge_type]
     rows: list[dict[str, Any]] = []
     for record in records:
         row: dict[str, Any] = {}
-        for key in VER53_COLUMNS + VER53_AUX_COLUMNS:
+        for key in columns + aux_columns:
             default: Any = 0 if key == "round" else ""
             row[key] = record.get(key, default)
         rows.append(row)
@@ -207,6 +255,11 @@ def _read_excel_by_schema(
             max_rounds: int = qa_config["max_rounds"]
             qa_fields: list[dict] = qa_config["fields"]
 
+            # message_id は ID ごとに横に連なるメッセージの通し連番（公式 ver5.3 出力用シートに準拠）。
+            # 読み順（round 昇順 → field 順）で非空メッセージを 01, 02, … と採番する。
+            # round と message_direction は別カラムとして保持するため情報は失われない
+            # （旧独自形式 {id}_{round}_{direction} を公式の通し連番に統一）。
+            seq = 0
             for round_num in range(1, max_rounds + 1):
                 for field_def in qa_fields:
                     actual_idx = (
@@ -219,16 +272,11 @@ def _read_excel_by_schema(
                     content = row.iloc[actual_idx].strip()
                     if not content or content in ("nan", "None"):
                         continue
-                    direction = _infer_direction(field_def["key"])
-                    # message_id は「1メッセージ=1行」（ver5.3）の一意キー。
-                    # 同一ラウンドの質問（nuro）と回答（denryoku）は別メッセージのため
-                    # 方向を含めて区別する（旧形式 {id}_{round} は質問/回答が衝突し、
-                    # ingest の doc_id 上書きでメッセージが消失していた）。
-                    suffix = direction if direction != "unknown" else f"x{field_def['col_offset']}"
+                    seq += 1
                     msg_record = {**base}
-                    msg_record["message_id"] = f"{id_val}_{round_num:02d}_{suffix}"
+                    msg_record["message_id"] = f"{id_val}_{seq:02d}"
                     msg_record["round"] = round_num
-                    msg_record["message_direction"] = direction
+                    msg_record["message_direction"] = _infer_direction(field_def["key"])
                     msg_record["message_content"] = content
                     records.append(msg_record)
         else:
