@@ -237,6 +237,10 @@ class TestKnowledgeLoader:
         assert records[0]["id"] == "03_1G_01_0001"
         assert records[0]["message_direction"] == "nuro"
         assert records[1]["message_direction"] == "denryoku"
+        # message_id は公式 ver5.3 準拠の通し連番（読み順で 01, 02, …）
+        assert records[0]["message_id"] == "03_1G_01_0001_01"
+        assert records[1]["message_id"] == "03_1G_01_0001_02"
+        assert records[0]["round"] == 1 and records[1]["round"] == 1
 
     def test_derive_reactor_type_map_lookup(self):
         """炉型導出：発電所キー＋号機上書きキーの優先順位（2026-07-02設計確定）"""
@@ -272,19 +276,20 @@ class TestKnowledgeLoader:
             rt = r.get("reactor_type", "")
             assert seen.setdefault(key, rt) == rt, f"同一発電所・号機で炉型が混在: {key}"
 
-    def test_message_id_unique_per_direction(self):
-        """同一ラウンドの質問と回答は別メッセージ＝message_id が衝突しない（Step1修正）
+    def test_message_id_unique(self):
+        """message_id は全メッセージで一意（公式 ver5.3 準拠の通し連番・F2/F3共通）
 
         旧形式 {id}_{round} は質問/回答で同一IDになり、ingest の doc_id 上書きで
         片方のメッセージが silently 消失していた（実データで 271→158 件に減少）。
+        通し連番 {id}_{seq} は読み順で各メッセージに一意番号を振る。
         """
-        from apps.backend.app.agents.reviewer._excel_reader import read_all_f3
-        records = read_all_f3()
-        assert records, "F3レコードが読めない"
-        message_ids = [r["message_id"] for r in records]
-        assert len(message_ids) == len(set(message_ids)), (
-            f"message_id 重複: {len(message_ids)} 件中 一意 {len(set(message_ids))} 件"
-        )
+        from apps.backend.app.agents.reviewer._excel_reader import read_all_f2, read_all_f3
+        for label, records in (("F3", read_all_f3()), ("F2", read_all_f2())):
+            assert records, f"{label}レコードが読めない"
+            message_ids = [r["message_id"] for r in records]
+            assert len(message_ids) == len(set(message_ids)), (
+                f"{label} message_id 重複: {len(message_ids)} 件中 一意 {len(set(message_ids))} 件"
+            )
 
     def test_excel_reader_adds_sheet_name(self):
         """スキーマに sheet_name があれば各レコードに由来シートが付く（ver5.3・Step1-1）"""
@@ -308,40 +313,41 @@ class TestKnowledgeLoader:
         assert len(records) == 1
         assert records[0]["sheet_name"] == "KNI_1G_01"
 
-    def test_ver53_columns_cover_f3_schemas(self):
-        """全F3スキーマの fixed_columns キーが ver5.3 正準列＋付帯列に収まっている（Step1-1）
+    def test_ver53_columns_cover_schemas(self):
+        """全F2/F3スキーマの fixed_columns キーが ver5.3 正準列＋付帯列に収まっている（Step1）
 
         逆方向も検証：ver5.3 本体列のうち flatten_qa 生成分（message_id/message_content）
         を除くすべてが、各スキーマの fixed_columns に実在する。
-        → schema YAML と VER53_COLUMNS の契約が乖離したらここで落ちる。
+        → schema YAML と VER53_SCHEMA の契約が乖離したらここで落ちる。
         """
         from apps.backend.app.agents.reviewer._excel_reader import (
-            VER53_AUX_COLUMNS,
-            VER53_COLUMNS,
+            VER53_SCHEMA,
             _discover_schemas,
         )
         generated_keys = {"message_id", "message_content"}
-        allowed = set(VER53_COLUMNS) | set(VER53_AUX_COLUMNS)
-        required_fixed = set(VER53_COLUMNS) - generated_keys
-
-        schemas = _discover_schemas("f3")
-        assert schemas, "F3スキーマが検出されない"
-        for schema in schemas:
-            keys = {c["key"] for c in schema.get("fixed_columns", [])}
-            assert keys <= allowed, (
-                f"{schema['sheet_name']}: ver5.3契約外の列 {keys - allowed}"
-            )
-            assert required_fixed <= keys, (
-                f"{schema['sheet_name']}: ver5.3必須列の欠落 {required_fixed - keys}"
-            )
+        for ktype in ("f2", "f3"):
+            columns, aux_columns = VER53_SCHEMA[ktype]
+            allowed = set(columns) | set(aux_columns)
+            required_fixed = set(columns) - generated_keys
+            schemas = _discover_schemas(ktype)
+            assert schemas, f"{ktype}スキーマが検出されない"
+            for schema in schemas:
+                keys = {c["key"] for c in schema.get("fixed_columns", [])}
+                assert keys <= allowed, (
+                    f"{ktype}/{schema['sheet_name']}: ver5.3契約外の列 {keys - allowed}"
+                )
+                assert required_fixed <= keys, (
+                    f"{ktype}/{schema['sheet_name']}: ver5.3必須列の欠落 {required_fixed - keys}"
+                )
 
     def test_to_ver53_rows_projection(self):
-        """to_ver53_rows は正準列＋付帯列に射影し、欠損は既定値・余分キーは落とす（Step1-1）"""
+        """to_ver53_rows は正準列＋付帯列に射影し、欠損は既定値・余分キーは落とす（Step1）"""
         from apps.backend.app.agents.reviewer._excel_reader import (
-            VER53_AUX_COLUMNS,
-            VER53_COLUMNS,
+            VER53_SCHEMA,
             to_ver53_rows,
         )
+        # F3（デフォルト）
+        f3_cols = set(VER53_SCHEMA["f3"][0]) | set(VER53_SCHEMA["f3"][1])
         records = [{
             "id": "03_1G_01_0001",
             "message_id": "03_1G_01_0001_01",
@@ -351,17 +357,25 @@ class TestKnowledgeLoader:
             "round": 1,
             "unexpected_key": "落とすべき",
         }]
-        rows = to_ver53_rows(records)
-
-        assert len(rows) == 1
-        row = rows[0]
-        assert set(row.keys()) == set(VER53_COLUMNS) | set(VER53_AUX_COLUMNS)
+        row = to_ver53_rows(records)[0]
+        assert set(row.keys()) == f3_cols
         assert "unexpected_key" not in row
-        assert row["id"] == "03_1G_01_0001"
         assert row["cost_category"] == "維持管理費"
         assert row["submission_timing"] == ""   # 欠損は空文字
         assert row["round"] == 1                # round は数値のまま
         assert to_ver53_rows([{}])[0]["round"] == 0  # round の既定値は 0
+
+        # F2（knowledge_type 指定）＝F2固有列に射影され、F3固有列は含まれない
+        f2_cols = set(VER53_SCHEMA["f2"][0]) | set(VER53_SCHEMA["f2"][1])
+        f2_row = to_ver53_rows([{
+            "id": "02_1G_0001",
+            "business_category": "工事情報",
+            "cost_category": "落とすべき（F2にcost_categoryは無い）",
+        }], knowledge_type="f2")[0]
+        assert set(f2_row.keys()) == f2_cols
+        assert f2_row["business_category"] == "工事情報"
+        assert "cost_category" not in f2_row
+        assert "reactor_type" not in f2_row  # F3固有の付帯列は混ざらない
 
     def test_supplement_returns_empty_for_denryoku(self):
         """電力ロールは補足資料を参照できない（Phase 3）"""

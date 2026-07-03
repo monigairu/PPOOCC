@@ -51,6 +51,13 @@ _DATASTORES = [
         "env_key": "VERTEX_SEARCH_F3_BQ_DATASTORE_ID",
         "structured": True,
     },
+    {
+        # F2 ver5.3 平坦テーブル（BigQuery）を索引する構造化データストア（§0-7 R3）
+        "datastore_id": "nuro-f2-bq-knowledge",
+        "display_name": "NuRO F2 Knowledge BQ (ver5.3平坦・BigQuery索引)",
+        "env_key": "VERTEX_SEARCH_F2_BQ_DATASTORE_ID",
+        "structured": True,
+    },
 ]
 
 
