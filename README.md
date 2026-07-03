@@ -126,7 +126,8 @@ uv run pytest
 | ドキュメント | 内容 |
 |---|---|
 | [docs/requirements.md](docs/requirements.md) | 要件・背景・PoCゴール・前任PoCとの差別化 |
-| [docs/architecture.md](docs/architecture.md) | システム設計・3層アーキテクチャ・将来構想 |
+| [docs/architecture.md](docs/architecture.md) | システム設計（様式自動作成・転記系） |
+| [docs/preliminary_review/ARCHITECTURE.md](docs/preliminary_review/ARCHITECTURE.md) | システム設計（事前レビュー・RAG） |
 | [docs/components.md](docs/components.md) | 各コンポーネントの責務 |
 | [docs/how_to_run.md](docs/how_to_run.md) | 環境構築・実行手順・引数説明 |
 

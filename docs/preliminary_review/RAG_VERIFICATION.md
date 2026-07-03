@@ -1,6 +1,6 @@
 # 事前レビューRAG — 検証結果・設計判断・実装バックログ
 
-最終更新：2026-07-02（課題①をa/bに分割・Rerankingの位置づけ明確化・数値チェック2種の区別を追記）
+最終更新：2026-07-03（アーキテクチャ図のファイル分割・親玉関数 `excel_to_bq_input` の追加を反映）
 
 > **本書の役割（HOW/Proof）**：PoCで「現行RAGが実データで機能するか」を検証した結果と、そこで下した
 > **設計判断**・**実装バックログ**を記録する。**要件・確定仕様（What/Why）の正本は `REQUIREMENTS.md §0`。**
@@ -38,6 +38,7 @@
 | 11 | **炉型は発電所から導出（Z列廃止が正）**（2026-07-03 確定） | ver5.3様式に炉型列は**存在しない**（Z列削除は意図的・ユーザー確認済み）。炉型は該当発電所→炉型のドメイン知識 `plant_reactor_map.yaml`（config・号機上書きキー対応）から**平坦化時に導出**。旧Z列の行単位値は発電所と不整合な合成ノイズだった（網走1号機にPWR/BWR混在）。導出により発電所・号機単位の一貫性が構造的に保証される（一貫性テスト追加） | `_excel_reader.py`／`plant_reactor_map.yaml`／`test_f3_reactor_type_derived_and_consistent` |
 | 12 | **BigQuery→Agent Search 経路の本採用**（2026-07-02・Step1） | `Excel→平坦化(ver5.3)→BigQuery→Agent Search索引` を実装し、マトリクス全PASSで本採用（measure-first・二系統フォールバック不要だった）。`_to_record` に cost_category→fee_type 互換エイリアス（relevance guard の grounding降格防止） | `ingest_knowledge.py`／`knowledge_loader.py` |
 | 13 | **F2 も BigQuery平坦化に統一**（2026-07-03） | F3と同じ `Excel→平坦化(ver5.3)→BigQuery(f2_flat_ver53)→Agent Search索引(nuro-f2-bq-knowledge)`。`to_ver53_rows` を knowledge_type 駆動に一般化（`VER53_SCHEMA` レジストリ・F2固有列＝業務カテゴリ/事象概要/判断基準等）。F2 も message_id 衝突で 86→44件消失していたのが復活。`caller_role_required=NuRO` を定数付帯列としてingest時付与（load_f2 の権限フィルタ用） | `_excel_reader.py`／`ingest_knowledge.py`／`settings.py` |
+| 14 | **アーキテクチャ図のファイル分割＋親玉関数化**（2026-07-03） | 上司指示により、事前レビュー(RAG)系のアーキテクチャ図を `docs/preliminary_review/ARCHITECTURE.md` に分割（様式自動作成は `docs/architecture.md` に残置）。ナレッジ供給パイプラインに親玉関数 `excel_to_bq_input()`（Excel読み取り結果→BigQueryインプットへ加工。`to_ver53_rows`＋`_apply_bq_field_defaults`＋message_id検証を束ねる）を新設し、既存の `run_review()`/`run_workflow()`/`load_f2/f3()` 等と合わせて親玉関数一覧をB-0に整理。リファクタ前後でBigQuery行の出力完全一致を確認（ゴールデン比較・F2=86行/F3=271行） | `_excel_reader.py`／`ingest_knowledge.py`／`docs/preliminary_review/ARCHITECTURE.md` |
 
 **横断原則（最重要・誤実装防止）**：チェックの拠り所は「**様式定義（config）＋普遍的算術**」のみ。特定費目/見積書
 構造/検証ケースに**ハードコード・過剰適合しない**。`run_review` / `knowledge_loader` の I/F は不変。

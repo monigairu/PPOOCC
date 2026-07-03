@@ -44,9 +44,9 @@ from google.protobuf import struct_pb2
 
 from apps.backend.app.agents.reviewer._excel_reader import (
     VER53_SCHEMA,
+    excel_to_bq_input,
     read_all_f2,
     read_all_f3,
-    to_ver53_rows,
 )
 from apps.backend.app.agents.reviewer.knowledge_loader import normalize_utility
 from apps.backend.app.core.settings import (
@@ -254,7 +254,7 @@ def _ingest_bigquery(knowledge_type: str) -> None:
     """F2/F3ナレッジを ver5.3 平坦形式（1メッセージ=1行）で BigQuery へロードし索引する。
 
     データの流れ（REQUIREMENTS §0-7 R3 / RAG_VERIFICATION §3-3）：
-        Excel(正本) → 平坦化(read_all_* + to_ver53_rows) → BigQuery(データ置き場)
+        Excel(正本) → 平坦化(read_all_* + excel_to_bq_input) → BigQuery(データ置き場)
         → Agent Search索引 → RAG検索
     - PoCは知識ベース凍結（R7）のため全件置換（WRITE_TRUNCATE）で常にExcel正本と一致させる
     - BigQuery 自体は検索しない（検索エンジンは Agent Search）
@@ -270,14 +270,11 @@ def _ingest_bigquery(knowledge_type: str) -> None:
         print("  ロードするレコードがありません")
         return
 
-    rows = to_ver53_rows(records, knowledge_type)
-    _apply_bq_field_defaults(knowledge_type, rows)
-
-    # id_field=message_id が空だと Agent Search 索引が壊れる（flatten_qa=False スキーマ混入時）
-    no_id = [r for r in rows if not r["message_id"]]
-    if no_id:
-        print(f"エラー: message_id が空の行が {len(no_id)} 件あります（flatten_qa=False のスキーマ？）")
-        print("       索引の id_field に使えないため中止します")
+    # 親玉関数：射影・フィールド補正・message_id検証をまとめて実行（_excel_reader.py）
+    try:
+        rows = excel_to_bq_input(records, knowledge_type)
+    except ValueError as e:
+        print(f"エラー: {e}")
         sys.exit(1)
 
     client = bigquery.Client(project=GCP_PROJECT_ID)
@@ -307,17 +304,6 @@ def _ingest_bigquery(knowledge_type: str) -> None:
 
     _index_bigquery_to_agent_search(cfg["datastore_id"], cfg["table_id"], label)
 
-
-def _apply_bq_field_defaults(knowledge_type: str, rows: list[dict[str, Any]]) -> None:
-    """knowledge_type ごとの ingest 時フィールド補正（検索側と一貫させる）。"""
-    if knowledge_type == "f3":
-        # 会社名は検索側（load_f3）・直接投入（_build_document）と同じ正規化で表記ゆれを吸収
-        for row in rows:
-            row["utility_name"] = normalize_utility(row["utility_name"])
-    elif knowledge_type == "f2":
-        # F2 は NuRO のみ参照可。load_f2 が caller_role_required=NuRO で絞るため定数を付与
-        for row in rows:
-            row["caller_role_required"] = "NuRO"
 
 
 def _index_bigquery_to_agent_search(datastore_id: str, table_id: str, label: str) -> None:
