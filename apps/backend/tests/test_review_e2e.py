@@ -201,9 +201,9 @@ class TestKnowledgeLoader:
         sheets = {s["sheet_name"] for s in _discover_schemas("f3")}
         assert sheets == {"KNI_1G_01", "KNI_1G_02", "KNI_1G_03", "KNI_2G"}
 
-    def test_excel_reader_with_mock_data(self):
-        """モックDataFrameでExcel読み込み処理を検証する（Phase2: _excel_reader に移動）"""
-        import pandas as pd
+    def test_excel_reader_with_mock_data(self, tmp_path):
+        """小さな実Excelファイルで読み込み処理を検証する（Phase2: _excel_reader に移動）"""
+        from openpyxl import Workbook
         from apps.backend.app.agents.reviewer._excel_reader import _read_excel_by_schema
 
         schema = {
@@ -224,13 +224,12 @@ class TestKnowledgeLoader:
             "meta_cells": {},
         }
 
-        raw_df = pd.DataFrame([
-            ["03_1G_01_0001", "維持管理費", "確認します", "問題ありません"],
-        ])
+        wb = Workbook()
+        wb.active.append(["03_1G_01_0001", "維持管理費", "確認します", "問題ありません"])
+        xlsx = tmp_path / "mini_f3.xlsx"
+        wb.save(xlsx)
 
-        with patch("apps.backend.app.agents.reviewer._excel_reader.pd.read_excel", return_value=raw_df):
-            from pathlib import Path
-            records, utility = _read_excel_by_schema(schema, Path("dummy.xlsx"))
+        records, utility = _read_excel_by_schema(schema, xlsx)
 
         assert utility == ""
         assert len(records) == 2
@@ -291,9 +290,9 @@ class TestKnowledgeLoader:
                 f"{label} message_id 重複: {len(message_ids)} 件中 一意 {len(set(message_ids))} 件"
             )
 
-    def test_excel_reader_adds_sheet_name(self):
+    def test_excel_reader_adds_sheet_name(self, tmp_path):
         """スキーマに sheet_name があれば各レコードに由来シートが付く（ver5.3・Step1-1）"""
-        import pandas as pd
+        from openpyxl import Workbook
         from apps.backend.app.agents.reviewer._excel_reader import _read_excel_by_schema
 
         schema = {
@@ -304,11 +303,12 @@ class TestKnowledgeLoader:
             "output_model": {"flatten_qa": False},
             "meta_cells": {},
         }
-        raw_df = pd.DataFrame([["03_1G_01_0001"]])
+        wb = Workbook()
+        wb.active.append(["03_1G_01_0001"])
+        xlsx = tmp_path / "mini_f3_sheetname.xlsx"
+        wb.save(xlsx)
 
-        with patch("apps.backend.app.agents.reviewer._excel_reader.pd.read_excel", return_value=raw_df):
-            from pathlib import Path
-            records, _ = _read_excel_by_schema(schema, Path("dummy.xlsx"))
+        records, _ = _read_excel_by_schema(schema, xlsx)
 
         assert len(records) == 1
         assert records[0]["sheet_name"] == "KNI_1G_01"
@@ -628,3 +628,206 @@ class TestSessionsEndpoint:
 
         assert res.status_code == 200
         assert res.json() == []
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 6. review_workbook — ワークブック一括レビューの統括関数（Step2）
+# ─────────────────────────────────────────────────────────────────────────────
+
+class TestReviewWorkbook:
+    """review_workbook() のオーケストレーションを検証する。
+
+    Excel復元・クエリ文脈導出・run_review はすべてモックし、
+    「シート列挙 → 復元 → スキップ判定 → run_review 呼び出し → 結果集約」
+    の制御フローだけをGCP接続なしで検証する（特定データファイルに依存しない）。
+    """
+
+    _CTX = {"fee_type": "解体撤去費", "reactor_type": "PWR", "utility_name": "AA電力"}
+
+    def _run(self, tmp_path, *, sheets=("MRC1", "MRC2"), mappings_by_sheet=None,
+             utility_name=None, sheet_names=None, ctx=None):
+        """モックを組んで review_workbook を実行し (結果, run_reviewモック) を返す。"""
+        import asyncio
+        from apps.backend.app.agents.reviewer import reviewer_agent as ra
+
+        excel = tmp_path / "result.xlsx"
+        excel.write_bytes(b"dummy")  # 存在チェック用（読み込みはモックする）
+
+        default_mappings = [{"field_name": "工事件名", "cell_address": "C5",
+                             "value": "解体工事", "reasoning": ""}]
+        mappings_by_sheet = mappings_by_sheet or {s: default_mappings for s in sheets}
+
+        def _fake_reconstruct(path, frame, sheet):
+            result = mappings_by_sheet.get(sheet, [])
+            if isinstance(result, Exception):
+                raise result
+            return result
+
+        mock_run_review = AsyncMock(return_value=([], [{"tool": "Tool1", "count": 0}]))
+        with patch.object(ra, "list_frame_sheets", return_value=list(sheets)), \
+             patch.object(ra, "reconstruct_mappings_from_excel", side_effect=_fake_reconstruct), \
+             patch.object(ra, "derive_query_context", return_value=dict(ctx or self._CTX)), \
+             patch.object(ra, "run_review", mock_run_review):
+            result = asyncio.run(ra.review_workbook(
+                excel_path=excel,
+                frame_name="frameB",
+                sheet_names=sheet_names,
+                utility_name=utility_name,
+            ))
+        return result, mock_run_review
+
+    def test_reviews_all_frame_sheets(self, tmp_path):
+        """シート未指定なら frame の全シートを一括レビューする"""
+        result, mock_rr = self._run(tmp_path)
+        assert set(result["sheets"].keys()) == {"MRC1", "MRC2"}
+        assert result["skipped_sheets"] == []
+        assert mock_rr.await_count == 2
+
+    def test_passes_query_context_and_utility(self, tmp_path):
+        """基本情報シート由来の費目・炉型・会社が run_review に渡る"""
+        result, mock_rr = self._run(tmp_path)
+        assert result["utility_name"] == "AA電力"  # ctx から自動解決
+        for call in mock_rr.await_args_list:
+            assert call.kwargs["reactor_type"] == "PWR"
+            assert call.kwargs["fee_type"] == "解体撤去費"
+            assert call.kwargs["utility_name"] == "AA電力"
+
+    def test_explicit_utility_overrides_context(self, tmp_path):
+        """utility_name を明示指定した場合は Excel 由来より優先する"""
+        result, mock_rr = self._run(tmp_path, utility_name="BB電力")
+        assert result["utility_name"] == "BB電力"
+        assert mock_rr.await_args_list[0].kwargs["utility_name"] == "BB電力"
+
+    def test_utility_fallback_when_context_empty(self, tmp_path):
+        """会社名が引数にも Excel にも無ければ「不明電力」で続行する"""
+        ctx = {"fee_type": None, "reactor_type": None, "utility_name": None}
+        result, _ = self._run(tmp_path, ctx=ctx)
+        assert result["utility_name"] == "不明電力"
+
+    def test_skips_empty_and_failing_sheets(self, tmp_path):
+        """mappings が空・復元例外のシートはスキップし、残りはレビューする"""
+        mappings = {
+            "MRC1": [{"field_name": "工事件名", "cell_address": "C5",
+                      "value": "解体工事", "reasoning": ""}],
+            "MRC2": [],                        # 空 → スキップ
+            "MRC3": FileNotFoundError("様式定義なし"),  # 例外 → スキップ
+        }
+        result, mock_rr = self._run(tmp_path, sheets=("MRC1", "MRC2", "MRC3"),
+                                    mappings_by_sheet=mappings)
+        assert set(result["sheets"].keys()) == {"MRC1"}
+        assert sorted(result["skipped_sheets"]) == ["MRC2", "MRC3"]
+        assert mock_rr.await_count == 1
+
+    def test_explicit_sheet_names_restrict_targets(self, tmp_path):
+        """sheet_names を指定した場合はそのシートだけレビューする"""
+        result, mock_rr = self._run(tmp_path, sheet_names=["MRC2"])
+        assert set(result["sheets"].keys()) == {"MRC2"}
+        assert mock_rr.await_count == 1
+
+    def test_missing_excel_raises(self, tmp_path):
+        """存在しないExcelパスは FileNotFoundError"""
+        import asyncio
+        from apps.backend.app.agents.reviewer import reviewer_agent as ra
+        with pytest.raises(FileNotFoundError):
+            asyncio.run(ra.review_workbook(excel_path=tmp_path / "nai.xlsx"))
+
+    def test_no_frame_config_raises(self, tmp_path):
+        """frame のシート定義が config に無ければ ValueError"""
+        import asyncio
+        from apps.backend.app.agents.reviewer import reviewer_agent as ra
+        excel = tmp_path / "result.xlsx"
+        excel.write_bytes(b"dummy")
+        with patch.object(ra, "list_frame_sheets", return_value=[]):
+            with pytest.raises(ValueError):
+                asyncio.run(ra.review_workbook(excel_path=excel, frame_name="nashi"))
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 7. Excel読み取りの行独立性 — ffill捏造の再発防止（2026-07-04・§1-16）
+# ─────────────────────────────────────────────────────────────────────────────
+
+class TestRowIsolationInExcelReader:
+    """_read_excel_by_schema の「空セルは空のまま」を固定するテスト。
+
+    旧実装は全列を無条件 ffill（下方向前埋め）しており、上の行のメッセージが
+    別IDのスレッドに複製される（F3 209→271件・F2 56→86件に水増し）バグがあった。
+    結合セルは _expand_merged_cells() が結合範囲に限定して展開する。
+    """
+
+    _SCHEMA = {
+        "layout": {"data_start_row": 2},
+        "loader_config": {"id_column": "A"},
+        "fixed_columns": [
+            {"key": "id",       "col": "A", "dtype": "string"},
+            {"key": "optional", "col": "B", "dtype": "string"},
+        ],
+        "repeating_qa_columns": {
+            "start_col": "C", "col_per_round": 2, "max_rounds": 2,
+            "fields": [
+                {"key": "nuro_comment",   "col_offset": 0},
+                {"key": "denryoku_reply", "col_offset": 1},
+            ],
+        },
+        "output_model": {"flatten_qa": True},
+        "meta_cells": {},
+    }
+
+    def _write_xlsx(self, tmp_path, rows, merges=()):
+        """テスト用の小さなExcelを作る（1行目=ヘッダー・2行目以降=データ）。"""
+        from openpyxl import Workbook
+        wb = Workbook()
+        ws = wb.active
+        ws.append(["ID", "任意列", "確認1", "回答1", "確認2", "回答2"])
+        for r in rows:
+            ws.append(r)
+        for m in merges:
+            ws.merge_cells(m)
+        path = tmp_path / "mini_knowledge.xlsx"
+        wb.save(path)
+        return path
+
+    def test_no_message_fabrication_from_previous_row(self, tmp_path):
+        """上の行に2往復あっても、1往復しかない次の行にメッセージが複製されない"""
+        from apps.backend.app.agents.reviewer._excel_reader import _read_excel_by_schema
+        path = self._write_xlsx(tmp_path, [
+            ["ID-001", "資料URL", "確認A", "回答A", "確認B", "回答B"],  # 2往復
+            ["ID-002", "",        "確認C", "回答C", "",      ""],       # 1往復のみ
+        ])
+        records, _ = _read_excel_by_schema(self._SCHEMA, path)
+
+        by_id = {}
+        for r in records:
+            by_id.setdefault(r["id"], []).append(r)
+        assert len(by_id["ID-001"]) == 4
+        assert len(by_id["ID-002"]) == 2, (
+            f"ID-002 は2メッセージのはず（ffill捏造の再発）: "
+            f"{[r['message_content'] for r in by_id['ID-002']]}"
+        )
+        assert [r["message_content"] for r in by_id["ID-002"]] == ["確認C", "回答C"]
+
+    def test_no_fixed_column_bleed_from_previous_row(self, tmp_path):
+        """意図的に空の固定列に、上の行の値（URL等）が染み出さない"""
+        from apps.backend.app.agents.reviewer._excel_reader import _read_excel_by_schema
+        path = self._write_xlsx(tmp_path, [
+            ["ID-001", "https://example.com/a.xlsx", "確認A", "回答A", "", ""],
+            ["ID-002", "",                           "確認B", "回答B", "", ""],
+        ])
+        records, _ = _read_excel_by_schema(self._SCHEMA, path)
+        id2 = [r for r in records if r["id"] == "ID-002"]
+        assert all(r["optional"] == "" for r in id2), (
+            f"ID-002 の optional は空のはず: {id2[0]['optional']!r}"
+        )
+
+    def test_merged_cells_are_expanded(self, tmp_path):
+        """結合セルは結合範囲に限定してアンカー値が展開される（fill_downの本来の意図）"""
+        from apps.backend.app.agents.reviewer._excel_reader import _read_excel_by_schema
+        path = self._write_xlsx(tmp_path, [
+            ["ID-001", "共通資料", "確認A", "回答A", "", ""],
+            ["ID-002", "",         "確認B", "回答B", "", ""],
+            ["ID-003", "",         "確認C", "回答C", "", ""],
+        ], merges=["B2:B3"])  # ID-001とID-002の任意列を結合（ID-003は結合外）
+        records, _ = _read_excel_by_schema(self._SCHEMA, path)
+        by_id = {r["id"]: r for r in records}
+        assert by_id["ID-001"]["optional"] == "共通資料"
+        assert by_id["ID-002"]["optional"] == "共通資料"  # 結合範囲内＝展開される
+        assert by_id["ID-003"]["optional"] == ""          # 結合範囲外＝空のまま

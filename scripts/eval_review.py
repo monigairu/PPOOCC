@@ -21,7 +21,11 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import yaml
 
-from scripts.verify_rag import reconstruct_mappings_from_excel, derive_query_context
+# Excel→mappings復元・クエリ文脈導出は result_reader が正本（verify_rag経由の間接importは廃止）
+from apps.backend.app.agents.reviewer.result_reader import (
+    reconstruct_mappings_from_excel,
+    derive_query_context,
+)
 from apps.backend.app.agents.reviewer import reviewer_agent, knowledge_loader
 
 DEFAULT_EXPECT = Path("data/review_eval/gold_expectations.yaml")
@@ -89,6 +93,7 @@ def check_review(items: list[dict], expect: dict) -> list[str]:
     n = len(items)
     blob = " ".join((it.get("field_name", "") + it.get("comment", "") + it.get("evidence", "")) for it in items)
     has_f3 = any("F3" in it.get("knowledge_source", "") for it in items)
+    has_f2 = any("F2" in it.get("knowledge_source", "") for it in items)
 
     if "max_items" in expect and n > expect["max_items"]:
         fails.append(f"件数 {n} > max_items {expect['max_items']}（過検出）")
@@ -99,6 +104,12 @@ def check_review(items: list[dict], expect: dict) -> list[str]:
     if expect.get("forbid_f3_grounded") and has_f3:
         bad = [it for it in items if "F3" in it.get("knowledge_source", "")]
         fails.append(f"正解不在なのにF3根拠の指摘 {len(bad)}件（ハルシネーション）")
+    # F2（NuRO内共有ナレッジ）根拠の指摘。ガード修正でF2も根拠採用できるため両向きを検証する
+    if expect.get("must_have_f2_grounded") and not has_f2:
+        fails.append("F2根拠の指摘が0件（grounding喪失）")
+    if expect.get("forbid_f2_grounded") and has_f2:
+        bad = [it for it in items if "F2" in it.get("knowledge_source", "")]
+        fails.append(f"正解不在なのにF2根拠の指摘 {len(bad)}件（ハルシネーション）")
     if expect.get("forbid_law_basis"):
         bad = [it for it in items if any(w in (it.get("comment", "") + it.get("evidence", "")) for w in _LAW_WORDS)]
         if bad:
