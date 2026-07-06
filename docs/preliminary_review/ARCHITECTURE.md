@@ -36,6 +36,7 @@
 | ① | Excel読取 | `read_all_f2()` / `read_all_f3()` | schema発見 → シート読込 → 炉型導出 | B-2-1 |
 | ① | BQインプット加工 | `excel_to_bq_input()` | ver5.3射影 → フィールド補正 → message_id検証 | B-2-1 |
 | ② | レビュー全体 | `run_review()` | 炉型・費目の補完 → Workflow起動 → 結果整形 | B-3 |
+| ② | ワークブック一括 | `review_workbook()` | シート列挙 → mappings復元 → `run_review()` をシート毎に実行 | B-3 |
 | ② | Excel復元 | `reconstruct_mappings_from_excel()` | セル読み → config照合 → mappings復元 | B-3 |
 | ② | Workflow実行 | `run_workflow()` | 5並列検索 → ルール検出 → 生成、の各ノードを編成 | B-4 |
 | ② | ナレッジ検索 | `load_f2()` / `load_f3()` | フィルタ構築 → ハイブリッド検索 → レコード変換 → 炉型後段フィルタ | B-5 |
@@ -145,8 +146,9 @@ flowchart TD
         UP["POST /api/review/upload<br/>upload_form_for_review()"] --> REC["reconstruct_mappings_from_excel()<br/>（result_reader.py・様式定義configで復元）"]
         REC --> SAVE["セッション保存 → 入口1と同じ流れへ"]
     end
-    subgraph E3["入口3: 検証ハーネス"]
-        VR["scripts/verify_rag.py --excel 転記結果.xlsx"] --> REC2["同じ reconstruct_mappings_from_excel()<br/>＋ derive_query_context()"]
+    subgraph E3["入口3: 任意の転記結果Excel（ワークブック一括）"]
+        VR["scripts/verify_rag.py --excel 転記結果.xlsx<br/>（薄ラッパ・表示とレポートのみ）"] --> WBK["review_workbook()<br/>（シート列挙 → 復元 → シート毎にレビュー）"]
+        WBK --> REC2["同じ reconstruct_mappings_from_excel()<br/>＋ derive_query_context()"]
     end
     FS1 --> AGENT["reviewer_agent.run_review()"]
     SAVE -.-> FS1
@@ -161,6 +163,7 @@ flowchart TD
 | `upload_form_for_review()`（同上・`POST /api/review/upload`） | 転記を経ずに完成様式Excelを直接レビューにかける入口。復元→Firestoreセッション作成 | `file=転記結果.xlsx, frame_name, sheet_name` | `UploadResponse(session_id, mappings)` |
 | `reconstruct_mappings_from_excel()`（`agents/reviewer/result_reader.py`） | 様式定義（`config/{frame}/{sheet}.yaml`）に基づきセル値→mappings を復元。label_value／plan_actual／tabular セクション対応。**特定ファイル・特定費目に依存しない** | `excel_path, frame, sheet` | `list[mapping dict]` |
 | `derive_query_context()`（同上） | Excelから検索文脈（費目・炉型・電力会社）を導出。クロスシート対応（MRC2レビューでも文脈はMRC1から取る） | `excel_path, frame, sheet, context_sheet` | `{fee_type, reactor_type, utility_name}` |
+| `review_workbook()`（`agents/reviewer/reviewer_agent.py`） | **ワークブック統括（Step2）**。config のシート一覧を列挙し、シート毎に「復元→`run_review()`」を実行。復元不能シートはスキップ・Firestore保存はしない（保存はAPI層の責務） | `excel_path, frame_name, [sheet_names], [utility_name], [context_sheet]` | `{utility_name, query_context, sheets{review_items, retrieval_trace, mappings}, skipped_sheets}` |
 | `reviewer_agent.run_review()`（`agents/reviewer/reviewer_agent.py`） | レビュー本体の外部I/F（**Phase 1から不変**）。mappingsから炉型・費目を自動補完し、Workflowを起動 | `session_id, utility_name, mappings, frame_name, sheet_name, [reactor_type], [fee_type]` | `(list[ReviewItem], retrieval_trace)` |
 | `build_search_query()`（`agents/reviewer/_review_logic.py`） | mappingsから「対象費目1＋工事件名」を取り出して検索クエリを合成（取れなければfallback） | `mappings, fallback` | `"施設解体一解体費 ○○建屋解体工事"` |
 

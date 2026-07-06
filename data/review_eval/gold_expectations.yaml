@@ -133,4 +133,5 @@ review_cases:
     sheet: MRC1
     expect:
       forbid_f3_grounded: true   # F3根拠の指摘を出してはならない（無関係データで捏造しない）
+      forbid_f2_grounded: true   # F2根拠も同様に禁止（ガード修正でF2も根拠採用可能になったため）
       forbid_law_basis: true

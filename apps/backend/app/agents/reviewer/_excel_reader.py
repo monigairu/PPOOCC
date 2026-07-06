@@ -14,6 +14,7 @@ from typing import Any
 
 import pandas as pd
 import yaml
+from openpyxl import load_workbook
 
 logger = logging.getLogger(__name__)
 
@@ -235,6 +236,37 @@ def _discover_schemas(frame_prefix: str) -> list[dict]:
     return schemas
 
 
+def _expand_merged_cells(df_raw: pd.DataFrame, ws) -> None:
+    """結合セルの値を結合範囲全体に展開する（df_raw を直接書き換える）。
+
+    Excelの結合セルは左上（アンカー）セルにしか値を持たず、グリッド化すると
+    残りのセルが空になる。schema の `merge_cell_handling: fill_down` の意図
+    （結合された行にも同じ値を行き渡らせる）を、openpyxl の結合範囲情報を
+    使って**結合セルに限定して**実現する。
+
+    ※ 旧実装の全列 ffill（無条件の下方向前埋め）は、結合と無関係な
+    「意図的に空のセル」に上の行の値を染み出させ、存在しないメッセージを
+    捏造していたため廃止（2026-07-04・RAG_VERIFICATION §1-16）。
+
+    Args:
+        df_raw: ワークシートを文字列化したグリッド（行0=Excel1行目・空セルは ""）。
+            この DataFrame を in-place で書き換える。
+        ws: 同じシートの openpyxl ワークシート（結合範囲 merged_cells の取得元）。
+
+    Returns:
+        None（df_raw を直接更新する）。
+    """
+    n_rows, n_cols = df_raw.shape
+    for rng in ws.merged_cells.ranges:
+        r0, c0 = rng.min_row - 1, rng.min_col - 1  # 0始まりに変換
+        if r0 >= n_rows or c0 >= n_cols:
+            continue
+        anchor = df_raw.iat[r0, c0]
+        for r in range(r0, min(rng.max_row, n_rows)):
+            for c in range(c0, min(rng.max_col, n_cols)):
+                df_raw.iat[r, c] = anchor
+
+
 def _read_excel_by_schema(
     schema: dict,
     file_path: Path,
@@ -245,15 +277,17 @@ def _read_excel_by_schema(
     id_col: str = loader_cfg.get("id_column", "A")
     id_col_idx: int = _col_letter_to_idx(id_col)
 
+    # openpyxl 1回読みでグリッド化（旧: pd.read_excel＋結合範囲取得のための再読込＝二重ロード）。
+    # 値は文字列化して空セルは ""（旧 dtype=str・fillna("") と同等の契約を維持）
     excel_sheet = schema.get("excel_sheet")
-    df_raw = pd.read_excel(
-        file_path,
-        sheet_name=excel_sheet if excel_sheet else 0,
-        header=None,
-        engine="openpyxl",
-        dtype=str,
-    )
-    df_raw = df_raw.fillna("")
+    wb = load_workbook(file_path, data_only=True)
+    ws = wb[excel_sheet] if excel_sheet and excel_sheet in wb.sheetnames else wb.worksheets[0]
+    df_raw = pd.DataFrame([
+        ["" if v is None else str(v) for v in row]
+        for row in ws.iter_rows(values_only=True)
+    ])
+    # 結合セルのみアンカー値を展開（merge_cell_handling: fill_down の正しい実装）
+    _expand_merged_cells(df_raw, ws)
 
     utility_name = ""
     for _meta_key, meta_val in schema.get("meta_cells", {}).items():
@@ -271,13 +305,10 @@ def _read_excel_by_schema(
     if data_start_row - 1 >= len(df_raw):
         return [], utility_name
 
+    # 旧実装はここで全列を無条件 ffill していたが、結合と無関係な空セルに
+    # 上の行の値が染み出し、メッセージの捏造・固定列の混入を起こすため廃止。
+    # 結合セルの展開は _expand_merged_cells() で対応済み。空セルは空のまま扱う。
     data_df = df_raw.iloc[data_start_row - 1:].copy().reset_index(drop=True)
-    data_df = (
-        data_df.replace("", pd.NA)
-               .ffill(axis=0)
-               .fillna("")
-               .astype(str)
-    )
 
     fixed_columns: list[dict] = schema.get("fixed_columns", [])
     qa_config: dict | None = schema.get("repeating_qa_columns")

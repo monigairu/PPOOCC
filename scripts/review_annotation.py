@@ -26,7 +26,11 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import yaml
 
-from scripts.verify_rag import reconstruct_mappings_from_excel, derive_query_context
+# Excel→mappings復元・クエリ文脈導出は result_reader が正本（verify_rag経由の間接importは廃止）
+from apps.backend.app.agents.reviewer.result_reader import (
+    reconstruct_mappings_from_excel,
+    derive_query_context,
+)
 from apps.backend.app.agents.reviewer import reviewer_agent
 
 GOLD_FILE = Path("data/review_eval/gold_expectations.yaml")

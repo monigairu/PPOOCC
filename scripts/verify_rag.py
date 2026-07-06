@@ -16,6 +16,10 @@ RAG実機能検証ハーネス（PoC検証用・既存システム非破壊）
   uv run python scripts/verify_rag.py --excel <...> --smoke-only      # 疎通確認のみ
   uv run python scripts/verify_rag.py --excel <...> --retrieval-only  # Geminiを呼ばず検索だけ
   オプション: --frame frameB --sheet MRC1 --utility "AA電力"
+  ※ --sheet 未指定なら config/{frame}/ に定義された全シート（MRC1・MRC2等）を一括レビュー。
+
+本スクリプトは検証用の薄いラッパ。レビュー実行の本体はワークブック統括関数
+reviewer_agent.review_workbook()（Excel→mappings復元→run_review をシートごとに実行）。
 
 前提:
   - .env に GCP プロジェクト・Vertex AI Search データストアID が設定済み（settings.py が読込）
@@ -36,10 +40,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from apps.backend.app.core import settings
 from apps.backend.app.agents.reviewer import knowledge_loader, reviewer_agent
-from apps.backend.app.agents.reviewer.result_reader import (
-    reconstruct_mappings_from_excel,
-    derive_query_context,
-)
+from apps.backend.app.agents.reviewer.result_reader import derive_query_context
 
 REPORT_DIR = Path("data/verification")
 _SNIPPET = 160  # content抜粋の最大文字数
@@ -81,8 +82,8 @@ def smoke_check() -> dict[str, Any]:
     return info
 
 
-# 結果Excel→mappings 復元 / クエリ文脈導出は result_reader へ移設（単一の置き場）。
-# reconstruct_mappings_from_excel / derive_query_context を import 済み。
+# 結果Excel→mappings 復元 / クエリ文脈導出は result_reader、レビュー実行の統括は
+# reviewer_agent.review_workbook() に置く（本スクリプトは表示とレポート整形のみ）。
 
 
 # ── ① 検索ヒットの中身ダンプ ──────────────────────────────────────────────────
@@ -134,45 +135,73 @@ def inspect_retrieval(query_ctx: dict[str, str | None], utility_name: str) -> di
 
 # ── ② 最終レビュー出力 ───────────────────────────────────────────────────────
 def run_full_review(
-    mappings: list[dict], utility_name: str, frame: str, sheet: str,
-    query_ctx: dict[str, str | None] | None = None,
+    excel_path: Path, utility_name: str | None, frame: str,
+    sheet: str | None, context_sheet: str,
 ) -> dict[str, Any]:
-    """本番同一経路で run_review を実行し review_items + retrieval_trace を返す。
+    """review_workbook() を本番同一経路で実行し、シート別の結果を表示・返却する薄ラッパ。
 
-    query_ctx を渡すと費目・炉型を明示指定する（MRC2 など対象シートに費目が
-    無い場合に、申請の基本情報シートから引いた文脈を使うため）。
+    Excel→mappings復元・クエリ文脈導出・run_review 呼び出しはすべて
+    reviewer_agent.review_workbook() に委譲する（本関数は表示とJSON化のみ）。
+
+    Args:
+        excel_path: 転記結果Excelのパス。
+        utility_name: 電力会社名。None なら Excel から自動取得。
+        frame: 様式名（config/{frame}/ を参照）。
+        sheet: レビュー対象シート名。None なら frame の全シートを一括レビュー。
+        context_sheet: 費目・炉型・会社のクエリ文脈を引く基本情報シート名。
+
+    Returns:
+        レポートJSON用の辞書:
+            - "utility_name" (str): 検索に使った電力会社名。
+            - "sheets" (dict): シート名 → {"review_items": 指摘のリスト（dict化済み）,
+              "retrieval_trace": 各Toolの検索記録, "mappings_count": 復元mappings件数}。
+            - "skipped_sheets" (list[str]): 復元できずスキップしたシート名。
     """
     print("\n" + "=" * 70)
-    print(" ② 最終レビュー出力 (run_review)")
+    print(" ② 最終レビュー出力 (review_workbook)")
     print("=" * 70)
 
-    query_ctx = query_ctx or {}
-    review_items, trace = asyncio.run(
-        reviewer_agent.run_review(
-            session_id="verify-rag-harness",
-            utility_name=utility_name,
-            mappings=mappings,
+    result = asyncio.run(
+        reviewer_agent.review_workbook(
+            excel_path=excel_path,
             frame_name=frame,
-            sheet_name=sheet,
-            reactor_type=query_ctx.get("reactor_type"),
-            fee_type=query_ctx.get("fee_type"),
+            sheet_names=[sheet] if sheet else None,
+            utility_name=utility_name,
+            context_sheet=context_sheet,
+            session_id="verify-rag-harness",
         )
     )
 
-    items = [i.model_dump() for i in review_items]
-    print(f"  指摘 {len(items)} 件")
-    for it in items:
-        print(f"\n  ● [{it['severity']}] {it['field_name']} ({it['cell_address']})"
-              f"  src={it['knowledge_source']}")
-        print(f"    {it['comment']}")
-        if it.get("evidence"):
-            print(f"    └ 根拠: {str(it['evidence'])[:_SNIPPET]}")
+    out: dict[str, Any] = {
+        "utility_name": result["utility_name"],
+        "sheets": {},
+        "skipped_sheets": result["skipped_sheets"],
+    }
+    for sheet_name, sheet_result in result["sheets"].items():
+        items = [i.model_dump() for i in sheet_result["review_items"]]
+        trace = sheet_result["retrieval_trace"]
+        out["sheets"][sheet_name] = {
+            "review_items": items,
+            "retrieval_trace": trace,
+            "mappings_count": len(sheet_result["mappings"]),
+        }
 
-    print("\n  -- retrieval_trace --")
-    for t in trace:
-        print(f"    {t.get('tool','')}: {t.get('count',0)}件 query={t.get('query','')!r}")
+        print(f"\n  ━━ シート {sheet_name}: 指摘 {len(items)} 件 "
+              f"(mappings {len(sheet_result['mappings'])} 件) ━━")
+        for it in items:
+            print(f"\n  ● [{it['severity']}] {it['field_name']} ({it['cell_address']})"
+                  f"  src={it['knowledge_source']}")
+            print(f"    {it['comment']}")
+            if it.get("evidence"):
+                print(f"    └ 根拠: {str(it['evidence'])[:_SNIPPET]}")
 
-    return {"review_items": items, "retrieval_trace": trace}
+        print("\n  -- retrieval_trace --")
+        for t in trace:
+            print(f"    {t.get('tool','')}: {t.get('count',0)}件 query={t.get('query','')!r}")
+
+    if result["skipped_sheets"]:
+        print(f"\n  ⚠️ スキップしたシート: {', '.join(result['skipped_sheets'])}")
+    return out
 
 
 # ── レポート書き出し ─────────────────────────────────────────────────────────
@@ -191,8 +220,7 @@ def write_report(excel_path: Path, payload: dict[str, Any]) -> Path:
               f"- F2 datastore: `{smoke.get('F2_DATASTORE_ID','')}` / F3: `{smoke.get('F3_DATASTORE_ID','')}`", ""]
 
     q = payload.get("retrieval", {}).get("queries", {})
-    lines += ["## 復元 mappings / 派生クエリ",
-              f"- mappings 件数: {len(payload.get('mappings', []))}",
+    lines += ["## 派生クエリ",
               f"- fee_type(対象費目1): `{q.get('fee_type')}` / 炉型: `{q.get('reactor_type')}`"
               f" / 会社: `{q.get('utility_name')}`", ""]
 
@@ -204,11 +232,16 @@ def write_report(excel_path: Path, payload: dict[str, Any]) -> Path:
 
     rv = payload.get("review", {})
     if rv:
-        items = rv.get("review_items", [])
-        lines += ["## ② レビュー指摘", f"- 合計 {len(items)} 件"]
-        for it in items:
-            lines.append(f"  - [{it['severity']}] {it['field_name']} ({it['cell_address']}) "
-                         f"src={it['knowledge_source']}: {it['comment']}")
+        lines += ["## ② レビュー指摘（シート別）"]
+        for sheet_name, sr in rv.get("sheets", {}).items():
+            items = sr.get("review_items", [])
+            lines.append(f"### {sheet_name} — {len(items)} 件"
+                         f"（mappings {sr.get('mappings_count', 0)} 件）")
+            for it in items:
+                lines.append(f"  - [{it['severity']}] {it['field_name']} ({it['cell_address']}) "
+                             f"src={it['knowledge_source']}: {it['comment']}")
+        if rv.get("skipped_sheets"):
+            lines.append(f"- スキップ: {', '.join(rv['skipped_sheets'])}")
         lines.append("")
     lines += ["> 検索ヒットの中身（全件）と struct_data は同名 `.json` を参照。"]
 
@@ -221,7 +254,8 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="RAG実機能検証ハーネス")
     parser.add_argument("--excel", help="転記結果Excelのパス")
     parser.add_argument("--frame", default="frameB")
-    parser.add_argument("--sheet", default="MRC1")
+    parser.add_argument("--sheet", default=None,
+                        help="レビュー対象シート（未指定なら config/{frame}/ の全シートを一括）")
     parser.add_argument("--context-sheet", default="MRC1",
                         help="費目・炉型・会社のクエリ文脈を取る基本情報シート（既定MRC1）")
     parser.add_argument("--utility", default=None, help="電力会社名（未指定ならExcelから取得）")
@@ -243,19 +277,21 @@ def main() -> None:
         print(f"\nExcelが見つかりません: {excel_path}")
         sys.exit(1)
 
-    mappings = reconstruct_mappings_from_excel(excel_path, args.frame, args.sheet)
-    payload["mappings"] = mappings
-
     # RAGクエリ文脈（費目・炉型・会社）は申請の基本情報シート(MRC1)から取得。
-    # MRC2 など対象シートに費目が無くても申請単位でクエリを組み立てられる。
-    query_ctx = derive_query_context(excel_path, args.frame, args.sheet, args.context_sheet)
+    # review_workbook() と同一の導出（同じ引数）に揃え、①検索ダンプと②レビューの
+    # 文脈が食い違わないようにする（レビュー指摘#5対応）。
+    query_ctx = derive_query_context(
+        excel_path, args.frame, args.context_sheet, args.context_sheet
+    )
     utility = args.utility or query_ctx.get("utility_name") or "不明電力"
-    print(f"\n復元した mappings: {len(mappings)} 件 / 電力会社={utility}")
+    print(f"\n電力会社={utility}")
 
     payload["retrieval"] = inspect_retrieval(query_ctx, utility)
 
     if not args.retrieval_only:
-        payload["review"] = run_full_review(mappings, utility, args.frame, args.sheet, query_ctx)
+        payload["review"] = run_full_review(
+            excel_path, args.utility, args.frame, args.sheet, args.context_sheet
+        )
 
     report = write_report(excel_path, payload)
     print(f"\n📄 レポート出力: {report} (+ .json)")

@@ -293,6 +293,9 @@ def _build_prompt(
 ### 最重要：過去ナレッジ（F2/F3）を根拠にした指摘を最優先で出すこと
 - Tool2a/2b（F3）の各レコードは、**NuROが過去に同種の費目・工事で実際に求めた確認事項**である。
   例：「解体範囲の確認資料を提出してください」=過去に解体費の審査で範囲資料を要求した事実。
+- Tool1（F2）の各レコードは、**NuRO内で共有される知見・確認の勘所**（過去の問合せ対応・委員会論点・
+  チェックリスト・工法選定や安全確認の基準など）である。同種の費目・工事に当てはまる知見があれば、
+  **F3と同格**で `[F2#N]` を根拠に指摘する（F3に該当事例が無くてもF2にあれば必ず拾う）。
 - 手順：F3/F2レコードを1件ずつ見て、「この過去事例が求めた事項が、本様式の転記結果に
   **記載されているか／十分か**」を照合する。
   - 記載が無い・不足・曖昧なら、その `[F3all#N]` / `[F3own#N]` / `[F2#N]` を evidence に明記し、
@@ -437,6 +440,54 @@ def _fee_related(submission_fee: str, doc_fee: str) -> bool:
     return bool(_fee_tokens(submission_fee) & _fee_tokens(doc_fee))
 
 
+def _content_tokens(text: str) -> set[str]:
+    """自由文から連続2文字トークン集合を作る（語の重なり判定用）。
+
+    区切り文字で分割してから各断片を `_fee_tokens` にかけるため、語境界を
+    またいだ偽トークンが生じない。費目を持たないナレッジ（F2）の関連性判定に使う。
+
+    Args:
+        text: ナレッジの内容テキスト（業務カテゴリ・事象概要・メッセージ内容などを連結したもの）。
+
+    Returns:
+        連続2文字トークンの集合。
+    """
+    tokens: set[str] = set()
+    for part in re.split(r"[\s、。,.／/・（）()\[\]「」]+", str(text)):
+        tokens |= _fee_tokens(part)
+    return tokens
+
+
+def _record_relevant(submission_fee: str, rec: dict) -> bool:
+    """過去ナレッジ1件が本申請の費目に関連するか（種別非依存の関連性判定）。
+
+    費目(fee_type)を持つレコード（F3）は費目語の重なりで判定する。費目列を
+    持たない NuRO 内共有ナレッジ（F2）は、代わりに内容語（業務カテゴリ・事象概要・
+    メッセージ内容）と申請費目の語の重なりで判定する。いずれも `_fee_tokens` の
+    連続2文字トークンで突合し、費目名をハードコードしない一般則。
+
+    Args:
+        submission_fee: 本申請の費目（対象費目1/2 のいずれか）。
+        rec: 検索で得たナレッジ1件（費目フィールドの有無で判定方法を切り替える）。
+
+    Returns:
+        本申請に関連するとみなせれば True。関連が辿れなければ False（＝根拠不採用の対象）。
+    """
+    # 費目フィールド（fee_type / cost_category）を持つレコード＝F3系。
+    # 値が空でも「費目を持つ様式なのに未記入」であり、内容語へフォールバックせず
+    # 従来どおり不採用にする（空費目レコードの根拠採用は誤groundingリスク）。
+    if "fee_type" in rec or "cost_category" in rec:
+        fee = str(rec.get("fee_type") or rec.get("cost_category") or "").strip()
+        return _fee_related(submission_fee, fee)
+    # 費目フィールド自体を持たないナレッジ（F2＝NuRO内共有・費目横断）のみ内容語で判定
+    content = " ".join(
+        str(rec.get(k, "")) for k in ("business_category", "phenomenon_summary", "message_content")
+    )
+    if not submission_fee or not content.strip():
+        return False
+    return bool(_fee_tokens(submission_fee) & _content_tokens(content))
+
+
 def apply_relevance_guard(
     items: list[ReviewItem],
     mappings: list[dict],
@@ -459,22 +510,24 @@ def apply_relevance_guard(
     if not submission_fee:
         return items
 
-    ref_fee: dict[str, str] = {}
+    # 各ナレッジ参照が本申請に関連するかを事前計算する（種別ごとに基準が異なる）。
+    #   F3（費目あり）        : 申請費目 ⇔ 過去事例費目 の語の重なり
+    #   F2（費目なし=NuRO内知見）: 申請費目 ⇔ 内容語（業務カテゴリ・事象概要・内容）の重なり
+    ref_relevant: dict[str, bool] = {}
     for prefix, recs in (("F2", f2_knowledge), ("F3own", f3_own), ("F3all", f3_all)):
         for i, r in enumerate(recs, 1):
-            ref_fee[f"{prefix}#{i}"] = r.get("fee_type", "")
+            ref_relevant[f"{prefix}#{i}"] = _record_relevant(submission_fee, r)
 
     for it in items:
         src = it.knowledge_source or ""
         if "F3" not in src and "F2" not in src:
             continue
         refs = re.findall(r"(F2|F3own|F3all)#(\d+)", it.evidence or "")
-        cited_fees = [ref_fee.get(f"{p}#{n}", "") for p, n in refs]
-        # 引用が本申請の費目に整合しない（または引用が辿れない）なら根拠を外す
-        if not any(_fee_related(submission_fee, cf) for cf in cited_fees):
+        # 引用が本申請に整合しない（または引用が辿れない）なら根拠を外す
+        if not any(ref_relevant.get(f"{p}#{n}", False) for p, n in refs):
             it.knowledge_source = "AI知見"
             it.severity = "要確認"
-            it.evidence = "AI判断（本申請の費目に整合する過去事例なし・根拠を不採用）"
+            it.evidence = "AI判断（本申請に整合する過去事例なし・根拠を不採用）"
     return items
 
 
