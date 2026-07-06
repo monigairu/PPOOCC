@@ -10,10 +10,11 @@ from apps.backend.app.core.excel_io import (
     copy_excel_file,
 )
 from apps.backend.app.core.cell_writer import write_to_cell, get_cell_value
+from apps.backend.app.config.path import template_workbook_path
 
 
 def main():
-    template_path = "data/form_generation/input/templates/frameB_MRC.xlsx"
+    template_path = str(template_workbook_path())
     output_path = "data/form_generation/output/test_result.xlsx"
 
     # 1. テンプレートをコピー

@@ -97,8 +97,9 @@ def main() -> None:
         from apps.backend.app.pipelines.form_generation_pipeline import (
             run_form_generation,
         )
+        from apps.backend.app.config.path import template_workbook_path
 
-        template_path = f"data/form_generation/input/templates/frameB_MRC.xlsx"
+        template_path = str(template_workbook_path())
         result_path = f"data/form_generation/output/result_{args.sheet}_extracted.xlsx"
         cache_path = f"data/form_generation/cache/mapping_cache_{args.sheet}.json"
 

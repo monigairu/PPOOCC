@@ -8,10 +8,11 @@ import json
 
 from apps.backend.app.core.excel_io import load_workbook_file
 from apps.backend.app.core.excel_scanner import scan_label_cells
+from apps.backend.app.config.path import template_workbook_path
 
 
 def main():
-    template_path = "data/form_generation/input/templates/frameB_MRC.xlsx"
+    template_path = str(template_workbook_path())
     sheet_name = "MRC1"
 
     print(f"テンプレートを読み込み中: {template_path}")

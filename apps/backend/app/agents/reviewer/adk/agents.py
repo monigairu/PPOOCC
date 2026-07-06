@@ -39,15 +39,34 @@ from apps.backend.app.agents.reviewer._review_logic import (
     detect_plan_diff,
     _compute_cell_sets,
     _generate_rule_based_items,
+    _generate_missing_entry_items,
     _build_prompt,
     _parse_review_response,
     apply_relevance_guard,
+    reanchor_review_items,
+    humanize_evidence_refs,
 )
-from apps.backend.app.agents.reviewer.criteria_loader import build_system_instruction
+from apps.backend.app.agents.reviewer.criteria_loader import build_system_instruction, load_required_entries
 from apps.backend.app.api.models import ReviewItem
 from apps.backend.app.core.ai_client import call_gemini
 
 logger = logging.getLogger(__name__)
+
+
+def _top_scores(records: list[dict], n: int = 3) -> list[float]:
+    """検索結果上位 n 件の Reranking スコア（`_rerank_score`）を丸めて返す。
+
+    Reranking の効き具合と閾値決定の実測用に retrieval_trace へ載せる（デバッグ可視化）。
+    スコアが無いレコード（Reranking 無効・API失敗）は空リストになる。
+
+    Args:
+        records: 検索結果レコードのリスト。
+        n: 先頭から何件のスコアを載せるか。
+
+    Returns:
+        小数第3位に丸めたスコアのリスト（`_rerank_score` を持つ先頭 n 件分）。
+    """
+    return [round(float(r["_rerank_score"]), 3) for r in records[:n] if "_rerank_score" in r]
 
 
 # ── Tool1: F2ナレッジ（NuRO内有の知見） ──────────────────────────────────────
@@ -72,6 +91,7 @@ async def f2_knowledge_node(ctx: Context) -> None:
         "query": fee_type or "（クエリなし）",
         "count": len(result),
         "top_ids": [r.get("_doc_id", "") for r in result[:3]],
+        "top_scores": _top_scores(result),
     }
 
 
@@ -99,6 +119,7 @@ async def f3_own_knowledge_node(ctx: Context) -> None:
         "query": fee_type or "（クエリなし）",
         "count": len(result),
         "top_ids": [r.get("_doc_id", "") for r in result[:3]],
+        "top_scores": _top_scores(result),
     }
 
 
@@ -125,6 +146,7 @@ async def f3_all_knowledge_node(ctx: Context) -> None:
         "query": fee_type or "（クエリなし）",
         "count": len(result),
         "top_ids": [r.get("_doc_id", "") for r in result[:3]],
+        "top_scores": _top_scores(result),
     }
 
 
@@ -199,6 +221,10 @@ def rule_check_node(ctx: Context) -> None:
        〇〇等のプレースホルダーを含むセルを必ず指摘する。
        Gemini に依存しない確定的な検出（重複防止のため synthesis_node に渡す）。
 
+    ③ 記載必須欄の空欄検出: load_required_entries + _generate_missing_entry_items
+       criteria YAML の required 宣言（opt-in）×様式定義のセル解決で、空欄の必須項目に
+       「記入してください」を指摘する。表はアクティブ行（転記済み行）×必須列で判定。
+
     rule_items は ReviewItem を dict 化したもの（ADK state は JSON 直列化可能な型のみ）。
     synthesis_node でルール検出済みセルを除外するために rule_cells も書き込む。
     """
@@ -212,6 +238,15 @@ def rule_check_node(ctx: Context) -> None:
     # ② プレースホルダー・空値検出
     empty_cells, placeholder_cells = _compute_cell_sets(mappings)
     rule_items_obj = _generate_rule_based_items(mappings, placeholder_cells)
+
+    # ③ 記載必須欄の空欄検出（決定論・criteria YAML の required 宣言に基づく。
+    #    LLMに空欄項目を渡す方式は過検出のため不採用＝§1-20。rule_cells 経由で
+    #    同一セルへのLLM重複指摘も自動排除される）
+    required = load_required_entries(frame_name, sheet_name)
+    rule_items_obj += _generate_missing_entry_items(
+        mappings, frame_name, sheet_name,
+        required["required_fields"], required["required_table_columns"],
+    )
 
     # ReviewItem → dict（ADK state に格納するため）
     rule_items = [item.model_dump() for item in rule_items_obj]
@@ -283,6 +318,15 @@ async def synthesis_node(ctx: Context) -> None:
     gemini_items = apply_relevance_guard(
         gemini_items, mappings, f2_knowledge, f3_own, f3_all
     )
+
+    # ── 番地補正：空欄項目への指摘は番地を推測しがちなので様式定義で是正 ──
+    # （実施費用低減策の指摘が工事件名 C6 に誤爆する等。config一致時のみ補正・表等は温存）
+    gemini_items = reanchor_review_items(gemini_items, frame_name, sheet_name, mappings)
+
+    # ── 出典の可読化：参照番号（[F3own#N]）をシート名・メッセージIDの出典表記へ ──
+    # （番号は検索結果の並び順でしかなくユーザーに伝わらない。ガードは参照番号の
+    #   字面で判定するため、必ず apply_relevance_guard より後に置く）
+    gemini_items = humanize_evidence_refs(gemini_items, f2_knowledge, f3_own, f3_all)
 
     # ── ルール検出済みセルを除外してマージ ─────────────────────────────────
     filtered_gemini = [i for i in gemini_items if i.cell_address not in rule_cells]

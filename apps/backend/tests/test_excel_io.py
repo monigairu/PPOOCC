@@ -11,8 +11,9 @@ from apps.backend.app.core.excel_io import (
     copy_excel_file,
 )
 from apps.backend.app.core.cell_writer import write_to_cell, get_cell_value
+from apps.backend.app.config.path import template_workbook_path
 
-TEMPLATE_PATH = "data/form_generation/input/templates/frameB_MRC.xlsx"
+TEMPLATE_PATH = str(template_workbook_path())
 OUTPUT_PATH = "data/form_generation/output/test_result.xlsx"
 
 
