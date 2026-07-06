@@ -6,10 +6,12 @@ config/{frame_name}/{sheet_name}.yaml を読み込み、
 （旧 frames/ から config/ へ移行。互換のため frames/ も後方探索する）
 """
 import yaml
-from pathlib import Path
 
-# 様式定義の探索先（config/ を正、frames/ は後方互換）
-_CONFIG_DIRS = (Path("config"), Path("frames"))
+from apps.backend.app.config.path import CONFIG_ROOT, FRAMES_CONFIG_ROOT
+
+# 様式定義の探索先（path.py 一元管理）。
+# config/frames/{frame}/ を正とし、config/{frame}/ 直下は後方互換で探索する。
+_CONFIG_DIRS = (FRAMES_CONFIG_ROOT, CONFIG_ROOT)
 
 
 def list_frame_sheets(frame_name: str) -> list[str]:

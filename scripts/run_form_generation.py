@@ -10,6 +10,7 @@ import argparse
 from dotenv import load_dotenv
 
 from apps.backend.app.pipelines.form_generation_pipeline import run_form_generation
+from apps.backend.app.config.path import template_workbook_path
 
 
 def main() -> None:
@@ -40,9 +41,7 @@ def main() -> None:
 
     # パス設定（シート名・様式名は引数から取得）
     source_json_path = args.input
-    template_excel_path = (
-        f"data/form_generation/input/templates/frameB_MRC.xlsx"
-    )
+    template_excel_path = str(template_workbook_path())
     result_excel_path = (
         f"data/form_generation/output/result_{args.sheet}.xlsx"
     )
