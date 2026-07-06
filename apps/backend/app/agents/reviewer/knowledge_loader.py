@@ -42,6 +42,8 @@ from apps.backend.app.core.settings import (
     GCP_PROJECT_ID,
     RERANK_ENABLED,
     RERANK_MODEL,
+    VERTEX_SEARCH_F2_BQ_DATASTORE_ID,
+    VERTEX_SEARCH_F2_BQ_ENGINE_ID,
     VERTEX_SEARCH_F2_DATASTORE_ID,
     VERTEX_SEARCH_F3_BQ_DATASTORE_ID,
     VERTEX_SEARCH_F3_BQ_ENGINE_ID,
@@ -79,10 +81,20 @@ def _serving_config(datastore_id: str) -> str:
     """
     データストアに対応するSearch Engineのserving configパスを返す。
     エンジンIDが設定されていればエンジン経由（推奨）、なければデータストア直接。
+
+    Args:
+        datastore_id: 検索対象のデータストアID（load_f2/load_f3 等が settings から渡す）。
+
+    Returns:
+        Vertex AI Search の servingConfig リソースパス。
+
+    BQ経路（無印キーとBQキーに同じデータストアIDを設定する運用）では
+    無印エンジン（旧・直接投入ストアに紐付く）に誤解決しないよう、BQ判定を先に行う。
     """
     engine_id = (
-        VERTEX_SEARCH_F2_ENGINE_ID         if datastore_id == VERTEX_SEARCH_F2_DATASTORE_ID
+        VERTEX_SEARCH_F2_BQ_ENGINE_ID      if datastore_id == VERTEX_SEARCH_F2_BQ_DATASTORE_ID
         else VERTEX_SEARCH_F3_BQ_ENGINE_ID if datastore_id == VERTEX_SEARCH_F3_BQ_DATASTORE_ID
+        else VERTEX_SEARCH_F2_ENGINE_ID    if datastore_id == VERTEX_SEARCH_F2_DATASTORE_ID
         else VERTEX_SEARCH_F3_ENGINE_ID    if datastore_id == VERTEX_SEARCH_F3_DATASTORE_ID
         else VERTEX_SEARCH_SUPPLEMENT_ENGINE_ID if datastore_id == VERTEX_SEARCH_SUPPLEMENT_DATASTORE_ID
         else ""
