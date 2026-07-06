@@ -45,6 +45,39 @@ def load_criteria(frame_name: str, sheet_name: str) -> list[dict]:
         return []
 
 
+def load_required_entries(frame_name: str, sheet_name: str) -> dict:
+    """レビュー観点YAMLから記載必須欄の宣言（空欄チェック用）を読み込む。
+
+    決定論の空欄検出ルール（_generate_missing_entry_items）が対象とする項目を返す。
+    LLMプロンプトには含めない（全項目をLLMに渡す方式は過検出のため不採用・RAG_VERIFICATION §1-20）。
+    宣言はopt-in：載せた項目だけをチェックする（対象費目2・対象号炉2〜4等の任意欄を
+    デフォルトで指摘しないため）。
+
+    Args:
+        frame_name: 様式名（例 "frameB"）。
+        sheet_name: シート名（例 "MRC1"）。
+
+    Returns:
+        {"required_fields": [フィールド名...],
+         "required_table_columns": {表セクション名: {"共通"/"計画"/"実績": [列名...]}}}。
+        ファイル・宣言が無い場合は両方空（＝チェックしない）。
+    """
+    empty = {"required_fields": [], "required_table_columns": {}}
+    path = _CRITERIA_DIR / f"{frame_name}_{sheet_name}.yaml"
+    if not path.exists():
+        return empty
+    try:
+        with open(path, encoding="utf-8") as f:
+            data = yaml.safe_load(f) or {}
+    except Exception as e:
+        logger.warning("レビュー観点ファイルの読み込みに失敗しました（%s）: %s", path, e)
+        return empty
+    return {
+        "required_fields": list(data.get("required_fields") or []),
+        "required_table_columns": dict(data.get("required_table_columns") or {}),
+    }
+
+
 def build_system_instruction(frame_name: str, sheet_name: str) -> str:
     """
     レビュー観点YAMLから Gemini の system_instruction テキストを生成する。

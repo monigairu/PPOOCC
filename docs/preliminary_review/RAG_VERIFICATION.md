@@ -1,6 +1,6 @@
 # 事前レビューRAG — 検証結果・設計判断・実装バックログ
 
-最終更新：2026-07-04（Step2＝`review_workbook` 追加／ffill捏造バグ修正＝真の件数 F3=209・F2=56／F2 grounding解禁#17／レビュー対応#18＝openpyxl一回読み・ガード判別強化／受け入れ基準の到達状況を§5に整理）
+最終更新：2026-07-06（空欄項目の指摘の番地誤爆を様式定義で決定論補正#20／Step5 Reranking#19・レビュー対応#19b／Step2#15-18・F2 grounding解禁#17／受け入れ基準の到達状況を§5に整理）
 
 > **本書の役割（HOW/Proof）**：PoCで「現行RAGが実データで機能するか」を検証した結果と、そこで下した
 > **設計判断**・**実装バックログ**を記録する。**要件・確定仕様（What/Why）の正本は `REQUIREMENTS.md §0`。**
@@ -43,6 +43,9 @@
 | 16 | **無条件ffill廃止＝捏造メッセージの根絶（真の件数 F3=209/F2=56）**（2026-07-04） | 生Excelとの全件突合で、`_read_excel_by_schema` の全列無条件 `ffill`（`merge_cell_handling: fill_down` の誤実装）が**結合と無関係な空セルに上の行の値を染み出させ、存在しないメッセージを捏造**していたことを発見（例：02_1G_0005の2往復目が別会社スレッド02_1G_0006に複製）。正本の結合セルはヘッダー行のみでデータ領域にゼロ＝ffillは害のみ。**従来の F3=271/F2=86 は水増しで、真の件数は F3=209/F2=56**（差分 62+30件が幻・誤ったID/発電所/費目メタデータ付きで索引されていた）。修正＝ffill廃止し `_expand_merged_cells()`（openpyxlの結合範囲に限定してアンカー値展開）に置換。本物のメッセージは修正前後で完全一致（message_id・内容とも差分0）。再ingest後 BigQuery=209/56 行で Excel再生成と完全一致・マトリクス全PASS。恒久検証は `scripts/verify_extraction.py`（生Excelを独立実装で読み直して突合・§4） | `_excel_reader.py`／`scripts/verify_extraction.py`／`test_review_e2e.py`（行独立性+3件） |
 | 17 | **F2 grounding の構造的解禁（一般改善・資料非依存）**（2026-07-04） | F2根拠の指摘が実データで一度も出ない真因は入力不足でなく**関連性ガードの構造的副作用**。ガードは「引用の費目が申請費目と語を共有しなければAI知見へ降格」するが、**F2は費目列を持たない**（NuRO内共有＝費目横断）ため `fee_type=None`→`_fee_related` が必ず False→**F2根拠は100%降格＝永久にゼロ**だった。修正：`_record_relevant` を新設し、費目を持つF3は従来どおり費目トークン、**費目を持たないF2は内容語（業務カテゴリ・事象概要・メッセージ内容）の重なり**で関連性判定（`_content_tokens`・ハードコードなし）。併せてプロンプトでF2をF3と対等な根拠源に格上げ（`[F2#N]` を明記）。安全側：難4を `forbid_f2_grounded` で強化（F2の誤groundingもハードゲート）。**特定入力・特定F2に依存しない一般則**で、resolveすべきは「情報源クラスの公平性」。既知の限界＝内容語2文字トークンの稀な部分一致偽陽性（例 放射線管理⇔放射性が"放射"で一致）は決定論ガード＋難4多層で抑制、一般的堅牢化は Reranking(§3-2)。実データでは費目特化のF3が precedent を豊富に持つためF3優位は継続（＝より直接関連する源が選ばれる正しい挙動・§5） | `_review_logic.py`（`apply_relevance_guard`/`_record_relevant`/`_content_tokens`/プロンプト）／`scripts/eval_review.py`／`gold_expectations.yaml` |
 | 18 | **コードレビュー対応（読み込み一本化・ガード判別強化）**（2026-07-04） | high効率レビューの指摘に対応：①Excel読み込みを**openpyxl 1回読みに統一**（旧: pd.read_excel＋結合範囲取得のための再読込＝二重ロード。テスト都合の `exists()` ガードも撤去し、pd.read_excelモックのテスト2件は実ファイル生成に書き換え）②関連性ガードの内容語フォールバックは**費目フィールド（fee_type/cost_category）を持たないレコード（F2）に限定**（費目が空のF3は従来どおり不採用＝誤groundingリスク回避）③verify_rag の①検索ダンプの文脈導出を `review_workbook()` と同一の呼び方に統一（①と②の文脈食い違い解消）。等価性証明＝`verify_extraction --bigquery` でBQ（修正前出力）と**内容差分0**・回帰53 PASS・マトリクス全PASS。**F2内容語の2文字部分一致偽陽性（例: 放射線管理⇔放射性）の根本解は Step5 Reranking のスコア閾値をガード判定に使う方針で確定**（字面での根治は正当ケースまで殺すため不可・現代RAGの標準はクロスエンコーダ再ランク） | `_excel_reader.py`／`_review_logic.py`／`scripts/verify_rag.py`／`test_review_e2e.py` |
+| 19 | **Reranking 実装（Step5・§3-2 の採用方針を実装＋#18偽陽性の根治）**（2026-07-05） | Agent Search の **Ranking API（`semantic-ranker-default-004`・25言語/1024トークン・2025-04 GA・依存追加なし）** を `knowledge_loader._search()` 後段の `_rerank()` として実装（並べ替えのみ・件数は削らない・API失敗時は元順で素通し＝検索を止めない）。`load_f2/f3/supplement` は無変更で恩恵。**#18のF2偽陽性を意味スコアで根治**：ガード `_record_relevant` のF2分岐を「`_rerank_score >= 閾値`」に変更（スコア無し時は内容語へフォールバック）。**実測校正**：semantic-ranker は費目クエリに対し F3=0.20〜0.36（費目特化で強関連）／F2=0.04〜0.08（NuRO内知見ゆえ弱関連）と**2.5倍のギャップで分離**するため閾値を gap 中間 **0.15**（`RERANK_GUARD_F2_THRESHOLD`・env可）に設定。これにより F2は主題一致で強関連なとき（例0.37）のみ根拠採用、字面2文字の偽陽性（放射性=0.05）は確実に不採用。**F3優位は reranker スコアでも裏付け**（F3が費目に直接強関連＝正しい挙動）。設定 `RERANK_ENABLED`(既定on)/`RERANK_MODEL`/`RERANK_GUARD_F2_THRESHOLD`。回帰61 PASS・マトリクス全PASS・rerank off で従来挙動へ完全フォールバック確認 | `knowledge_loader.py`／`_review_logic.py`／`settings.py`／`adk/agents.py`(trace top_scores)／`test_review_e2e.py`（+8件） |
+| 19b | **Step5 コードレビュー対応（堅牢化7件）**（2026-07-05） | high効率レビューの指摘に対応（回帰68 PASS・マトリクス全PASS）：①**ガードのスコア意味論を明文化**＝F2スコアは検索クエリ（費目＋工事件名・§1-7で意図的に広げた）への関連度であり「同一工事のNuRO内知見も関連」は意図した挙動、と `_record_relevant` docstring/コメントに明記（字面条件の再導入はしない＝#17趣旨堅持）②**F2全降格の観測ログ**＝`apply_relevance_guard` でF2が1件も関連判定されない時に warning（モデル/閾値ずれによる無音回帰の早期検知）＋降格時に info ③**`_rerank` の id 重複・負数・範囲外を採用済みindex集合で防御**（二重採用/取りこぼし防止・`query or "工事"` 死コード除去）④`_env_float` で閾値の不正env値を既定退避＝**import時クラッシュ防止**（アプリ全体停止を回避）⑤`_env_bool` で `1/yes/on` 等の真値も許容 ⑥テスト強化＝`_search`→`_rerank` 配線・スコア救済（費目と語を共有しない高スコア）・id重複/負数・caption経路 ⑦**補足資料(Tool4)は `caption` を rerank content に使用**（PoCではDS未設定で潜在だが1行で予防）。据え置き＝レガシー直接投入の空費目F3（現BQ経路では非発生）・炉型経路の過剰rerank（PoC規模で無視可・本番§3-1で最適化） | `knowledge_loader.py`／`_review_logic.py`／`settings.py`／`test_review_e2e.py`（+7件） |
+| 20 | **空欄項目の指摘の番地誤爆を決定論で是正（`reanchor_review_items`）**（2026-07-06） | 空欄フィールド（値が無く mappings に載らない項目）への指摘は、LLM が正しいセル番地を知らず**可視セルへ誤爆**する（実例：実施費用低減策の指摘が工事件名 C6 に付きハイライトが誤る）。真因＝`empty_cells` は mappings 由来で空欄項目を含まず、LLM はその番地を渡されないため推測する。修正：LLM生成後に**様式定義（config）から `field_name→正しいセル` を解決して補正**する `reanchor_review_items`（`apply_relevance_guard` 後に実行）。plan_actual は計画実績区分で計画=plan列/実績=actual列を選択、複数セクション定義（炉型＝C7とG9）は候補を和集合し**有効セルは温存**、**config一覧に無い field（表・LLM言い換え）は一切触らない**（安全側・特定費目/セルのハードコードなし）。measure-first：当初 LLM へ全定義項目を渡す補完（②）も試したが**難4ハードゲートを破る過検出**が出たため撤去し、①決定論補正のみ採用（回帰74 PASS・マトリクス全PASS） | `_review_logic.py`（`reanchor_review_items`/`_field_anchor_map`）／`adk/agents.py`／`test_review_e2e.py`（+6件） |
 
 **横断原則（最重要・誤実装防止）**：チェックの拠り所は「**様式定義（config）＋普遍的算術**」のみ。特定費目/見積書
 構造/検証ケースに**ハードコード・過剰適合しない**。`run_review` / `knowledge_loader` の I/F は不変。
@@ -68,7 +71,7 @@
 | ③ | Tool3 類似工事データ | ⛔ | PoC範囲外 |
 | ④ | Tool4 補足資料（Phase3） | ⛔ | PoC範囲外 |
 | ⑤ | reactor_type フィルタ | 🟦 | 有効化済み（§1-5） |
-| ⑥ | Reranking | 🔲 | **PoC採用方針**＝Agent Search Ranking API。`_search()` 後段に実装（§3-2） |
+| ⑥ | Reranking | 🟦 | **実装済み（Step5・2026-07-05・§1-19）**＝Agent Search Ranking API（`semantic-ranker-default-004`）を `_search()` 後段の `_rerank()` に。surfacing底上げ＋F2ガードの偽陽性根治（閾値0.15） |
 | ⑦ | Tool2b が自社も返す（重複表示） | 🔲(軽微) | 表示の冗長のみ |
 | ⑧ | 過剰指摘 | 🟦 | 統合で抑制（§1-3）。継続は `/review/stats` 棄却率で監視 |
 | ⑨ | キャプション生成モデル（Phase3） | ⛔ | Tool4範囲外につき該当なし |
@@ -81,7 +84,7 @@
 | — | F3スキーマを ver.5.3 平坦形式へ | 🟦 | **実装済み（2026-07-02・Step1）**：`VER53_COLUMNS`/`to_ver53_rows`（`_excel_reader.py`）＝正準列契約＋射影。sheet_name付与・message_id一意化（§1-10）込み |
 | — | BigQuery平坦テーブル＋Agent Search索引 | 🟦 | **実装済み・本採用（2026-07-02・Step1）**：`ingest_knowledge.py --backend bigquery` → `nuro-f3-bq-knowledge`（FULL同期・id_field=message_id）。マトリクス全PASS・回帰41 PASS・切替は .env のID差し替えのみ（§1-12） |
 | — | 承諾→F3 Excel追記→BigQuery反映（還流） | 🔲(本番) | **実現性確認済み**（追記=openpyxl／反映=INSERT/MERGE）。**PoCは凍結＝未実装**（再現性のため・R6/§3-3） |
-| — | Reranking（Ranking API） | 🔲 | semantic-ranker を `_search()` 後段に（§3-2・採用方針） |
+| — | Reranking（Ranking API） | 🟦 | **実装済み（§1-19）**：semantic-ranker を `_search()` 後段に。F2ガードのスコア統合込み |
 | — | 提出タイミング＋G/K列フィルタ | 🔲 | 区分(C8)で **RAG対象シート**(計画→計画申請時 KNI_1G_01／実績→費用請求時 KNI_1G_02)と**レビュー列**(計画=G／実績=K)を分岐。情報提供時は検索対象外。**実績の差分はTool5**＝課題①b(MRC2計画/実績ペア定義)と連動。`submission_timing` 後段フィルタ＋セルG/K選別・I/F不変・measure-first（REQUIREMENTS §0-3） |
 
 ---
@@ -99,8 +102,10 @@ PoCの小規模で"たまたま動く"設計にしない。本番は N社 × 各
 
 ### 3-2. Agent Search（旧 Vertex AI Search）採否
 - **名称**：Vertex AI Search → **Agent Search**（土台は Discovery Engine・SDKそのまま＝移行不要・既に利用中）。
-- **✅ Ranking API（semantic-ranker, 1024トークン/件・日本語可・≒$1/1000）＝PoC採用**。検索結果を関連度0–1で
-  再ランク＋topN。低コスト・低リスク・surfacing改善に直結。実装は `knowledge_loader._search()` 後段（I/F不変）。
+- **✅ Ranking API（semantic-ranker, 1024トークン/件・日本語可・≒$1/1000）＝PoC採用・実装済み（§1-19・Step5）**。
+  検索結果を関連度0–1で再ランク。低コスト・低リスク・surfacing改善に直結。実装は `knowledge_loader._search()` 後段の
+  `_rerank()`（I/F不変・並べ替えのみ・API失敗時は素通し）。モデルは `semantic-ranker-default-004`（2025-04 GA・25言語）。
+  スコアは関連性ガードのF2判定にも使用（§1-19・閾値0.15）。
 - **⚠️ Answer API（grounded answer）＝不採用**：我々の出力はセル単位・観点駆動の構造化指摘で、汎用Q&A回答では
   表現できない（support scoreの発想のみ将来参考）。
 - **❌ Gemini Enterprise/Agentspace＝不採用**：組織横断の検索UI/エージェント基盤で用途レイヤーが違う。
@@ -199,9 +204,9 @@ uv run python scripts/review_annotation.py --excel <結果.xlsx> --sheets MRC1,M
 - **「ここまでできる」**：軸①難1〜3・軸②難1〜4は現状の実データで PASS。処理対象（電力・費目）が変わっても
   **様式定義＋普遍則に依拠し特定資料へハードコードしていない**ため挙動は安定。
 - **「〇〇は△△に留意」**：
-  1. **surfacing の底上げ**＝PoC小規模ゆえ、件数増で関連レコードが押し出される。一般的な解は **Reranking（Step5・§3-2）**（データ作り込みではなく機構で対応）。
-  2. **F2 grounding**＝解禁済みだが費目非構造ゆえF3優位。F2を情報源として厚くするなら**現実的なNuRO間やり取りの追記**で行う（特定入力向けの作り込みはしない）。
-  3. **LLMのばらつき**＝指摘件数は run ごとに変動。安全側（非ハルシネーション・誤grounding）は**決定論ガード＋難4ハードゲート**で担保。
+  1. **surfacing の底上げ**＝**Reranking 実装済み（Step5・§1-19）**：semantic-ranker で検索結果を関連度順に再ランク。件数増で関連レコードが押し出される問題に機構で対応（データ作り込みでない）。本番スケールでは取得上限とセットで調整（§3-1）。
+  2. **F2 grounding**＝解禁済み＋Reranking スコアで関連性判定（§1-19）。実測で reranker は費目クエリに対しF3=0.2〜0.36／F2=0.04〜0.08と分離＝**費目レビューではF3が強関連でF2は弱関連＝F3優位は正しい挙動**。F2を情報源として厚くするなら**現実的なNuRO間やり取りの追記**または**F2向け検索クエリの改善**で行う（特定入力向けの作り込みはしない）。
+  3. **LLMのばらつき**＝指摘件数は run ごとに変動。安全側（非ハルシネーション・誤grounding）は**決定論ガード（Rerankingスコア閾値）＋難4ハードゲート**で担保。
 
 ---
 

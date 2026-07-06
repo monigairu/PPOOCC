@@ -16,7 +16,7 @@
 > **⚠️ §0 は確定"仕様（目標）"であり、"実装済み"とは限らない**。実装状況は **§11-2（到達点サマリ）**／
 > **`RAG_VERIFICATION.md §1（実装済）・§2（未実装）`** で必ず確認すること。
 > （**§0-7 の BigQuery/平坦化/ver.5.3 は実装済み🟦**（2026-07-02・Step1）。
-> 特に **§0-3 後半の計画/実績シート分岐・Reranking は未実装🔲**）
+> 特に **§0-3 後半の計画/実績シート分岐は未実装🔲**（Reranking は実装済み🟦・2026-07-05・Step5・`RAG_VERIFICATION §1-19`））
 
 ### 0-1. スコープ（PoCで対象とするTool）
 - **対象**：Tool1=F2 / Tool2a=F3自社 / Tool2b=F3他社 / Tool5=計画実績差分（ルール）＋ レビュー観点。
@@ -406,7 +406,7 @@ sessions/{session_id}/
 
 ### 11-1. PoCスコープの再定義（Phase区分→Tool区分）
 - 旧Phase1（構造化フィルタ）→ Phase2（ハイブリッド検索）は **Agent Search 上で完了**し、現行は **Phase2 相当
-  （ただし §4-2 Phase2 定義のうち Reranking は未実装**・§0-3 の採用方針）。
+  （§4-2 Phase2 定義の Reranking も実装済み🟦・2026-07-05・Step5）**。
 - 旧 **Phase3（Tool4 補足資料マルチモーダル）は PoC範囲外**（§0-1）。Tool3（類似工事）も範囲外。
 - よって本書の進捗は **Phase進捗でなく「Tool1/2a/2b＋Tool5＋観点」の実装・検証状況**で見る。
 
@@ -418,7 +418,7 @@ sessions/{session_id}/
 | レビュー観点（review_criteria）／Tool5 計画実績差分（現設計に整合） | ✅ 実装済 |
 | 検証基盤（verify_rag／eval_review＋gold_expectations／review_annotation） | ✅ 整備済・回帰41 PASS |
 | **F3検索基盤（Excel→平坦化ver5.3→BigQuery→Agent Search索引・§0-7）** | ✅ 実装・マトリクス全PASSで本採用（2026-07-02・Step1） |
-| **Reranking（Ranking API）** | 🔲 採用方針・**未実装**（§0-3／`RAG_VERIFICATION.md §2`） |
+| **Reranking（Ranking API・semantic-ranker-default-004）** | ✅ 実装済（2026-07-05・Step5・`RAG_VERIFICATION.md §1-19`）＝surfacing底上げ＋F2ガードのスコア統合 |
 | 数値妥当性チェック／転記の粒度感チェック／MRC2観点／config転記系パス追従 | 🔲 決定・未実装 |
 | ゴールド指摘（NuRO正解）の確定／認証（本番） | 🔲 未確定・将来 |
 | Tool3 類似工事／Tool4 補足資料（Phase3） | ⛔ PoC範囲外 |

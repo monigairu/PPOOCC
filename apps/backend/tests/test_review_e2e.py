@@ -831,3 +831,479 @@ class TestRowIsolationInExcelReader:
         assert by_id["ID-001"]["optional"] == "共通資料"
         assert by_id["ID-002"]["optional"] == "共通資料"  # 結合範囲内＝展開される
         assert by_id["ID-003"]["optional"] == ""          # 結合範囲外＝空のまま
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 8. Reranking（Ranking API）— surfacing底上げ＋ガードのスコア統合（Step5・§1-19）
+# ─────────────────────────────────────────────────────────────────────────────
+
+class TestRerank:
+    """knowledge_loader._rerank のオーケストレーションを検証する（GCP接続なし）。
+
+    RankServiceClient をモックし、並べ替え・スコア付与・安全フォールバックの
+    制御フローだけを確認する。
+    """
+
+    def _fake_rank_response(self, ordered):
+        """ordered=[(id, score),...] から RankResponse 相当のモックを返す。"""
+        resp = MagicMock()
+        resp.records = [MagicMock(id=str(i), score=s) for i, s in ordered]
+        return resp
+
+    def _records(self):
+        return [
+            {"_doc_id": "A", "message_content": "解体撤去の費用内訳"},
+            {"_doc_id": "B", "message_content": "放射性廃棄物の処分"},
+            {"_doc_id": "C", "message_content": "解体工法の選定基準"},
+        ]
+
+    def test_reorders_by_score_and_attaches_score(self):
+        """スコア降順に並べ替わり、各レコードに _rerank_score が付く"""
+        from apps.backend.app.agents.reviewer import knowledge_loader as kl
+        client = MagicMock()
+        # 入力順 A,B,C を C,A,B に並べ替え（idは入力インデックス0,1,2）
+        client.rank.return_value = self._fake_rank_response([(2, 0.91), (0, 0.55), (1, 0.10)])
+        client.ranking_config_path.return_value = "rc"
+        with patch.object(kl, "RERANK_ENABLED", True), \
+             patch.object(kl, "GCP_PROJECT_ID", "proj"), \
+             patch.object(kl, "_get_rank_client", return_value=client):
+            out = kl._rerank("解体撤去費", self._records())
+        assert [r["_doc_id"] for r in out] == ["C", "A", "B"]
+        assert out[0]["_rerank_score"] == 0.91
+        assert all("_rerank_score" in r for r in out)
+
+    def test_api_error_falls_back_to_original_order(self):
+        """API エラー時は元の順序をそのまま返す（検索を止めない）"""
+        from apps.backend.app.agents.reviewer import knowledge_loader as kl
+        from google.api_core.exceptions import GoogleAPICallError
+        client = MagicMock()
+        client.rank.side_effect = GoogleAPICallError("boom")
+        client.ranking_config_path.return_value = "rc"
+        with patch.object(kl, "RERANK_ENABLED", True), \
+             patch.object(kl, "GCP_PROJECT_ID", "proj"), \
+             patch.object(kl, "_get_rank_client", return_value=client):
+            out = kl._rerank("q", self._records())
+        assert [r["_doc_id"] for r in out] == ["A", "B", "C"]
+        assert all("_rerank_score" not in r for r in out)
+
+    def test_disabled_skips_rank_call(self):
+        """RERANK_ENABLED=false なら rank() を呼ばず素通し"""
+        from apps.backend.app.agents.reviewer import knowledge_loader as kl
+        client = MagicMock()
+        with patch.object(kl, "RERANK_ENABLED", False), \
+             patch.object(kl, "GCP_PROJECT_ID", "proj"), \
+             patch.object(kl, "_get_rank_client", return_value=client):
+            out = kl._rerank("q", self._records())
+        client.rank.assert_not_called()
+        assert [r["_doc_id"] for r in out] == ["A", "B", "C"]
+
+    def test_missing_response_records_are_appended(self):
+        """rank応答が一部欠けても取りこぼさず全件返す（安全網）"""
+        from apps.backend.app.agents.reviewer import knowledge_loader as kl
+        client = MagicMock()
+        client.rank.return_value = self._fake_rank_response([(2, 0.9)])  # C のみ返る
+        client.ranking_config_path.return_value = "rc"
+        with patch.object(kl, "RERANK_ENABLED", True), \
+             patch.object(kl, "GCP_PROJECT_ID", "proj"), \
+             patch.object(kl, "_get_rank_client", return_value=client):
+            out = kl._rerank("q", self._records())
+        assert {r["_doc_id"] for r in out} == {"A", "B", "C"}
+        assert out[0]["_doc_id"] == "C"
+
+    def test_duplicate_ids_do_not_double_count_or_drop(self):
+        """重複idは1回だけ採用し、欠けたレコードは末尾に温存する（二重採用・取りこぼし防止）"""
+        from apps.backend.app.agents.reviewer import knowledge_loader as kl
+        client = MagicMock()
+        # id "0" が2回・"1" が欠落。素朴な長さ一致判定だと B を落とし A を二重採用してしまう
+        client.rank.return_value = self._fake_rank_response([(0, 0.9), (0, 0.8), (2, 0.5)])
+        client.ranking_config_path.return_value = "rc"
+        with patch.object(kl, "RERANK_ENABLED", True), \
+             patch.object(kl, "GCP_PROJECT_ID", "proj"), \
+             patch.object(kl, "_get_rank_client", return_value=client):
+            out = kl._rerank("q", self._records())
+        assert [r["_doc_id"] for r in out] == ["A", "C", "B"]  # A1回・C・欠落Bを末尾温存
+        assert len(out) == 3
+
+    def test_negative_and_out_of_range_ids_are_skipped(self):
+        """負数・範囲外idは無視し、欠けたレコードは末尾に温存する"""
+        from apps.backend.app.agents.reviewer import knowledge_loader as kl
+        client = MagicMock()
+        client.rank.return_value = self._fake_rank_response([(-1, 0.9), (99, 0.8), (1, 0.5)])
+        client.ranking_config_path.return_value = "rc"
+        with patch.object(kl, "RERANK_ENABLED", True), \
+             patch.object(kl, "GCP_PROJECT_ID", "proj"), \
+             patch.object(kl, "_get_rank_client", return_value=client):
+            out = kl._rerank("q", self._records())
+        assert {r["_doc_id"] for r in out} == {"A", "B", "C"}
+        assert out[0]["_doc_id"] == "B"  # 有効idの1のみ先頭、A/Cは末尾温存
+
+    def test_caption_used_as_content_for_supplement(self):
+        """message_content が無い補足資料（Tool4）は caption を検索対象テキストに使う"""
+        from apps.backend.app.agents.reviewer import knowledge_loader as kl
+        captured = {}
+
+        def _capture_rank(request):
+            captured["contents"] = [r.content for r in request.records]
+            return self._fake_rank_response([(0, 0.9)])
+
+        client = MagicMock()
+        client.rank.side_effect = _capture_rank
+        client.ranking_config_path.return_value = "rc"
+        recs = [{"_doc_id": "S", "caption": "格納容器の外観写真。腐食が確認できる。"}]
+        with patch.object(kl, "RERANK_ENABLED", True), \
+             patch.object(kl, "GCP_PROJECT_ID", "proj"), \
+             patch.object(kl, "_get_rank_client", return_value=client):
+            kl._rerank("q", recs)
+        assert captured["contents"] == ["格納容器の外観写真。腐食が確認できる。"]
+
+    def test_search_invokes_rerank(self):
+        """_search が検索結果を _rerank に通す配線を固定（呼び出し削除の回帰検知）"""
+        from apps.backend.app.agents.reviewer import knowledge_loader as kl
+        search_client = MagicMock()
+        search_client.search.return_value = MagicMock(results=["r1", "r2"])
+        sentinel = [{"_doc_id": "X"}]
+        with patch.object(kl, "GCP_PROJECT_ID", "proj"), \
+             patch.object(kl, "_get_search_client", return_value=search_client), \
+             patch.object(kl, "_to_record", side_effect=lambda r: {"_doc_id": r}), \
+             patch.object(kl, "_rerank", return_value=sentinel) as mock_rerank:
+            out = kl._search("ds", "解体撤去費")
+        mock_rerank.assert_called_once()
+        # _search は _rerank の戻り値をそのまま返す
+        assert out is sentinel
+
+
+class TestRelevanceGuardWithScore:
+    """_record_relevant の Reranking スコア統合（§1-18 の偽陽性排除）。"""
+
+    def test_f2_score_above_threshold_is_relevant(self):
+        """高スコアなら費目と語を共有しなくても関連＝スコア経路を証明（トークン経路では拾えない）"""
+        from apps.backend.app.agents.reviewer import _review_logic as rl
+        # 内容は費目「施設解体一解体費」と2文字トークンを一切共有しない（＝旧トークン判定なら False）
+        rec = {"message_content": "基礎撤去に伴う産業廃棄物の処理手順", "_rerank_score": 0.72}
+        with patch.object(rl, "RERANK_GUARD_F2_THRESHOLD", 0.35):
+            assert rl._record_relevant("施設解体一解体費", rec) is True
+
+    def test_f2_low_score_rejected_even_if_tokens_collide(self):
+        """『放射線管理費』×『放射性廃棄物』は2文字"放射"で一致するが、低スコアで不採用"""
+        from apps.backend.app.agents.reviewer import _review_logic as rl
+        rec = {"message_content": "一次系配管解体に伴う放射性廃棄物の追加発生", "_rerank_score": 0.08}
+        with patch.object(rl, "RERANK_GUARD_F2_THRESHOLD", 0.35):
+            # スコアが閾値未満なので False（字面トークンなら True になってしまうケース）
+            assert rl._record_relevant("放射線管理費", rec) is False
+
+    def test_f2_without_score_falls_back_to_content_tokens(self):
+        """スコアが無ければ従来の内容語トークン判定にフォールバック"""
+        from apps.backend.app.agents.reviewer import _review_logic as rl
+        rec = {"message_content": "解体工法の選定基準"}  # _rerank_score なし
+        assert rl._record_relevant("施設解体一解体費", rec) is True
+
+    def test_f3_with_fee_type_ignores_score(self):
+        """費目を持つF3はスコアに関係なく従来どおり費目語で判定"""
+        from apps.backend.app.agents.reviewer import _review_logic as rl
+        rec = {"cost_category": "解体撤去費", "fee_type": "解体撤去費", "_rerank_score": 0.01}
+        assert rl._record_relevant("施設解体一解体費", rec) is True
+
+
+class TestSettingsEnvParsing:
+    """settings の環境変数パーサ（不正値でアプリ起動を止めない・一般的な真値を許容）。"""
+
+    def test_env_bool_accepts_common_truthy(self, monkeypatch):
+        from apps.backend.app.core.settings import _env_bool
+        for v in ("1", "true", "True", "YES", "on"):
+            monkeypatch.setenv("X_RERANK_T", v)
+            assert _env_bool("X_RERANK_T", False) is True
+        for v in ("0", "false", "no", "off", "maybe"):
+            monkeypatch.setenv("X_RERANK_T", v)
+            assert _env_bool("X_RERANK_T", True) is False
+
+    def test_env_bool_default_when_unset(self, monkeypatch):
+        from apps.backend.app.core.settings import _env_bool
+        monkeypatch.delenv("X_RERANK_UNSET", raising=False)
+        assert _env_bool("X_RERANK_UNSET", True) is True
+
+    def test_env_float_bad_value_falls_back(self, monkeypatch):
+        """ロケールカンマ等の不正値でも例外を投げず既定値に退避（import時クラッシュ防止）"""
+        from apps.backend.app.core.settings import _env_float
+        monkeypatch.setenv("X_RERANK_TH", "0,15")
+        assert _env_float("X_RERANK_TH", 0.15) == 0.15
+        monkeypatch.setenv("X_RERANK_TH", "0.42")
+        assert _env_float("X_RERANK_TH", 0.15) == 0.42
+
+
+class TestReanchorReviewItems:
+    """空欄項目への指摘の番地補正（様式定義駆動・#番地誤爆の是正）。"""
+
+    _MAPS = [{"field_name": "計画実績区分", "cell_address": "C8", "value": "計画", "reasoning": ""}]
+
+    def _item(self, field, cell):
+        from apps.backend.app.api.models import ReviewItem
+        return ReviewItem(item_id="", field_name=field, cell_address=cell,
+                          severity="要確認", comment="", evidence="", knowledge_source="AI知見")
+
+    def test_empty_field_misanchor_is_corrected(self):
+        """空欄項目(実施費用低減策)の指摘が可視セルC6に誤爆 → 様式定義でG24に補正"""
+        from apps.backend.app.agents.reviewer._review_logic import reanchor_review_items
+        items = [self._item("実施費用低減策", "C6")]
+        reanchor_review_items(items, "frameB", "MRC1", self._MAPS)
+        assert items[0].cell_address == "G24"
+
+    def test_plan_actual_prefers_actual_for_jisseki(self):
+        """実績提出なら plan_actual 項目は actual 列(K24)へ補正"""
+        from apps.backend.app.agents.reviewer._review_logic import reanchor_review_items
+        maps = [{"field_name": "計画実績区分", "cell_address": "C8", "value": "実績"}]
+        items = [self._item("実施費用低減策", "C6")]
+        reanchor_review_items(items, "frameB", "MRC1", maps)
+        assert items[0].cell_address == "K24"
+
+    def test_valid_cell_is_left_untouched(self):
+        """既に定義セル(G24)に付いている指摘は温存（不要な補正をしない）"""
+        from apps.backend.app.agents.reviewer._review_logic import reanchor_review_items
+        items = [self._item("実施費用低減策", "G24")]
+        reanchor_review_items(items, "frameB", "MRC1", self._MAPS)
+        assert items[0].cell_address == "G24"
+
+    def test_field_in_two_sections_keeps_valid_cell(self):
+        """複数セクションに定義される炉型(C7とG9)は、どちらの有効セルも補正しない"""
+        from apps.backend.app.agents.reviewer._review_logic import reanchor_review_items
+        for cell in ("C7", "G9"):
+            items = [self._item("炉型", cell)]
+            reanchor_review_items(items, "frameB", "MRC1", self._MAPS)
+            assert items[0].cell_address == cell, f"{cell} は温存されるべき"
+
+    def test_tabular_field_is_left_untouched(self):
+        """様式定義一覧に無い表フィールドは温存（元番地が正しいため触らない）"""
+        from apps.backend.app.agents.reviewer._review_logic import reanchor_review_items
+        items = [self._item("解体機器表_30_計画_費用", "J30")]
+        reanchor_review_items(items, "frameB", "MRC1", self._MAPS)
+        assert items[0].cell_address == "J30"
+
+    def test_unknown_field_is_left_untouched(self):
+        """様式定義に無い field名（LLMの言い換え等）は温存"""
+        from apps.backend.app.agents.reviewer._review_logic import reanchor_review_items
+        items = [self._item("費用低減の記載について", "C6")]
+        reanchor_review_items(items, "frameB", "MRC1", self._MAPS)
+        assert items[0].cell_address == "C6"
+
+
+class TestHumanizeEvidenceRefs:
+    """参照番号（[F3own#N] 等）→ 実出典表記（シート・メッセージID）への置換。
+
+    実レコードは message_id 列を持たず、一意なメッセージIDは _doc_id
+    （通し連番 {id}_{seq:02d}）である。基底 id はスレッド共通のため、_doc_id を正とする。
+    """
+
+    _F3_OWN = [
+        {"sheet_name": "KNI_1G_01", "_doc_id": "03_KT_1G_01_0003_02", "id": "03_KT_1G_01_0003", "utility_name": "関東電力"},
+        {"sheet_name": "KNI_1G_02", "_doc_id": "03_KT_1G_02_0005_02", "id": "03_KT_1G_02_0005", "utility_name": "関東電力"},
+        # 上と同スレッド（基底 id 共通）だが別メッセージ（seq 03）。潰してはいけない。
+        {"sheet_name": "KNI_1G_01", "_doc_id": "03_KT_1G_01_0003_03", "id": "03_KT_1G_01_0003", "utility_name": "関東電力"},
+    ]
+    _F3_ALL = [
+        {"sheet_name": "HKD_1G", "_doc_id": "03_HK_1G_0002_02", "id": "03_HK_1G_0002", "utility_name": "北の海電力"},
+    ]
+    _F2 = [
+        {"sheet_name": "KNS_1G", "_doc_id": "03_KS_1G_0001_02", "id": "03_KS_1G_0001"},
+    ]
+
+    def _item(self, evidence, comment="", source="F3"):
+        from apps.backend.app.api.models import ReviewItem
+        return ReviewItem(item_id="", field_name="f", cell_address="C6",
+                          severity="要確認", comment=comment, evidence=evidence,
+                          knowledge_source=source)
+
+    def _run(self, items):
+        from apps.backend.app.agents.reviewer._review_logic import humanize_evidence_refs
+        return humanize_evidence_refs(items, self._F2, self._F3_OWN, self._F3_ALL)
+
+    def test_f3own_ref_replaced_with_source(self):
+        """[F3own#1] が シート＋メッセージID(_doc_id)＋会社名 の出典表記になる"""
+        items = self._run([self._item("過去事例 [F3own#1] を参照")])
+        assert items[0].evidence == "過去事例 【F3ナレッジ（自社：関東電力）｜シートKNI_1G_01｜メッセージID 03_KT_1G_01_0003_02】 を参照"
+
+    def test_f3all_and_f2_labels(self):
+        """F3all は他社表記・F2 は NuRO内知見表記になる"""
+        items = self._run([self._item("[F3all#1] と [F2#1]")])
+        assert "【F3ナレッジ（他社：北の海電力）｜シートHKD_1G｜メッセージID 03_HK_1G_0002_02】" in items[0].evidence
+        assert "【F2ナレッジ（NuRO内知見）｜シートKNS_1G｜メッセージID 03_KS_1G_0001_02】" in items[0].evidence
+        assert "#" not in items[0].evidence
+
+    def test_out_of_range_ref_kept_verbatim(self):
+        """辿れない参照番号（範囲外）は原文温存（安全側）"""
+        items = self._run([self._item("[F3own#9] 参照")])
+        assert items[0].evidence == "[F3own#9] 参照"
+
+    def test_duplicate_same_ref_collapsed(self):
+        """同一事例を複数番号で引いた連なりは同一表記を1件に畳む"""
+        items = self._run([self._item("根拠あり ([F3own#1], [F3own#1], [F3own#1])")])
+        assert items[0].evidence == "根拠あり (【F3ナレッジ（自社：関東電力）｜シートKNI_1G_01｜メッセージID 03_KT_1G_01_0003_02】)"
+
+    def test_same_thread_distinct_messages_not_collapsed(self):
+        """基底 id が同じでも別メッセージ（_doc_id 相違）は畳まず両方残す"""
+        items = self._run([self._item("([F3own#1]、[F3own#3])")])
+        assert "03_KT_1G_01_0003_02" in items[0].evidence
+        assert "03_KT_1G_01_0003_03" in items[0].evidence
+        # 2件が別表記として残る（区切りで連結）
+        assert items[0].evidence.count("【") == 2
+
+    def test_mixed_run_dedup_preserves_order(self):
+        """連なり内で重複だけ畳み、異なる出典は元順序を保つ"""
+        items = self._run([self._item("[F3own#1], [F3own#2], [F3own#1]")])
+        assert items[0].evidence == (
+            "【F3ナレッジ（自社：関東電力）｜シートKNI_1G_01｜メッセージID 03_KT_1G_01_0003_02】, "
+            "【F3ナレッジ（自社：関東電力）｜シートKNI_1G_02｜メッセージID 03_KT_1G_02_0005_02】"
+        )
+
+    def test_record_without_locator_kept_verbatim(self):
+        """由来情報（シート・ID）を全く持たないレコードへの参照は原文温存"""
+        from apps.backend.app.agents.reviewer._review_logic import humanize_evidence_refs
+        items = [self._item("[F3own#1] 参照")]
+        humanize_evidence_refs(items, [], [{"utility_name": "関東電力"}], [])
+        assert items[0].evidence == "[F3own#1] 参照"
+
+    def test_comment_refs_also_replaced(self):
+        """comment 内の参照番号も置換される（プロンプトは comment への引用も許可）"""
+        items = self._run([self._item("根拠なし", comment="同種案件（[F3all#1]）で確認済み")])
+        assert "【F3ナレッジ（他社：北の海電力）" in items[0].comment
+
+    def test_ref_without_brackets_replaced(self):
+        """角括弧なしの表記ゆれ（F3own#2）も置換される"""
+        items = self._run([self._item("F3own#2 を参照")])
+        assert items[0].evidence == "【F3ナレッジ（自社：関東電力）｜シートKNI_1G_02｜メッセージID 03_KT_1G_02_0005_02】 を参照"
+
+    def test_no_refs_evidence_unchanged(self):
+        """参照番号を含まない evidence（AI判断等）は不変"""
+        text = "AI判断（ナレッジ参照なし）：記載が不足"
+        items = self._run([self._item(text, source="AI知見")])
+        assert items[0].evidence == text
+
+    def test_returns_same_list_inplace(self):
+        """guard/reanchor と同じ規約：同一リストを in-place 更新して返す"""
+        src = [self._item("[F3own#1]")]
+        result = self._run(src)
+        assert result is src
+
+
+class TestGenerateMissingEntryItems:
+    """記載必須欄の空欄検出（決定論ルール・criteria YAML の opt-in 宣言駆動）。"""
+
+    _REQ_FIELDS = ["工事件名", "実施費用低減策", "説明"]
+    _REQ_TABLE = {"解体機器表": {"計画": ["計画_費用"], "実績": ["実績_費用"]}}
+
+    def _map(self, field, cell, value):
+        return {"field_name": field, "cell_address": cell, "value": value, "reasoning": ""}
+
+    def _run(self, mappings, fields=None, table=None):
+        from apps.backend.app.agents.reviewer._review_logic import _generate_missing_entry_items
+        return _generate_missing_entry_items(
+            mappings, "frameB", "MRC1",
+            self._REQ_FIELDS if fields is None else fields,
+            self._REQ_TABLE if table is None else table,
+        )
+
+    def test_absent_required_field_flagged_at_config_cell(self):
+        """mappings に載っていない必須項目（未転記）は様式定義のセルで指摘される"""
+        items = self._run([self._map("計画実績区分", "C8", "計画")], table={})
+        by_field = {i.field_name: i for i in items}
+        assert by_field["実施費用低減策"].cell_address == "G24"
+        assert by_field["説明"].cell_address == "G25"
+        assert by_field["実施費用低減策"].severity == "要確認"
+        assert "記入してください" in by_field["実施費用低減策"].comment
+
+    def test_empty_value_flagged_and_filled_not_flagged(self):
+        """空値で載っている項目は指摘・記載済みの項目は指摘しない"""
+        maps = [
+            self._map("計画実績区分", "C8", "計画"),
+            self._map("工事件名", "C6", "館山2号機 解体撤去工事"),  # 記載あり
+            self._map("実施費用低減策", "G24", "  "),               # 空白のみ＝空欄
+        ]
+        items = self._run(maps, table={})
+        fields = {i.field_name for i in items}
+        assert "工事件名" not in fields
+        assert "実施費用低減策" in fields
+
+    def test_jisseki_prefers_actual_cell(self):
+        """実績提出なら plan_actual 項目は実績セル(K24)で指摘される"""
+        items = self._run([self._map("計画実績区分", "C8", "実績")], table={})
+        by_field = {i.field_name: i.cell_address for i in items}
+        assert by_field["実施費用低減策"] == "K24"
+
+    def test_unknown_declaration_skipped(self):
+        """様式定義に無い必須宣言（設定ミス）は黙ってスキップ"""
+        items = self._run([], fields=["存在しない項目"], table={})
+        assert items == []
+
+    def test_table_empty_cells_aggregated_per_column(self):
+        """表のアクティブ行の空欄は列単位で1件に集約・先頭セルが番地になる"""
+        maps = [
+            self._map("計画実績区分", "C8", "計画"),
+            # 行30: 費用あり／行31: 解体機器のみ（費用空欄）／行32: 員数のみ（費用空欄）
+            self._map("解体機器表_30_計画_費用", "J30", "1000000"),
+            self._map("解体機器表_31_解体機器", "D31", "換気制御盤"),
+            self._map("解体機器表_32_計画_員数", "G32", "3"),
+        ]
+        items = self._run(maps, fields=[])
+        assert len(items) == 1
+        item = items[0]
+        assert item.field_name == "解体機器表_計画_費用"
+        assert item.cell_address == "J31"
+        assert "J31" in item.comment and "J32" in item.comment and "J30" not in item.comment
+
+    def test_table_fully_filled_no_items(self):
+        """アクティブ行の必須列が全て記載済みなら指摘なし（非アクティブ行は対象外）"""
+        maps = [
+            self._map("計画実績区分", "C8", "計画"),
+            self._map("解体機器表_30_計画_費用", "J30", "1000000"),
+            self._map("解体機器表_30_解体機器", "D30", "ポンプ"),
+        ]
+        assert self._run(maps, fields=[]) == []
+
+    def test_table_jisseki_checks_actual_column(self):
+        """実績提出なら実績_費用(N列)をチェックする"""
+        maps = [
+            self._map("計画実績区分", "C8", "実績"),
+            self._map("解体機器表_30_解体機器", "D30", "ポンプ"),  # アクティブ行・N30空欄
+        ]
+        items = self._run(maps, fields=[])
+        assert len(items) == 1
+        assert items[0].cell_address == "N30"
+
+    def test_no_declarations_returns_empty(self):
+        """宣言が空なら何もチェックしない（opt-in）"""
+        assert self._run([self._map("実施費用低減策", "G24", "")], fields=[], table={}) == []
+
+
+class TestMissingEntryGolden:
+    """ゴールデンExcelに対する空欄チェックの実測検証（measure-first・過検出防止）。
+
+    完成版ゴールデンは実施理由/実施費用低減策/説明（MRC1）・年度単位総額_N年度（MRC2）が
+    実際に空欄（正本データの既知の状態・2026-07-06実測）。このテストは
+    「既知の空欄だけを検出し、記載済み欄には一切指摘しない」ことを固定する。
+    ゴールデン側の空欄が埋められたら期待値を空集合に更新する。
+    """
+
+    _GOLDEN = "data/golden/frameB/フレームB_転記結果__ダミー完成版.xlsx"
+    _KNOWN_GAPS = {
+        "MRC1": {("実施理由", "G23"), ("実施費用低減策", "G24"), ("説明", "G25")},
+        "MRC2": {("年度単位総額_N年度", "C30")},
+    }
+
+    def test_golden_detects_known_gaps_only(self):
+        """完成版の既知の空欄のみを検出（＝それ以外への過検出ゼロ）"""
+        import pathlib
+        if not pathlib.Path(self._GOLDEN).exists():
+            pytest.skip("ゴールデンExcelなし")
+        from apps.backend.app.agents.reviewer._review_logic import _generate_missing_entry_items
+        from apps.backend.app.agents.reviewer.criteria_loader import load_required_entries
+        from apps.backend.app.agents.reviewer.result_reader import reconstruct_mappings_from_excel
+        for sheet in ("MRC1", "MRC2"):
+            mappings = reconstruct_mappings_from_excel(self._GOLDEN, "frameB", sheet)
+            req = load_required_entries("frameB", sheet)
+            items = _generate_missing_entry_items(
+                mappings, "frameB", sheet,
+                req["required_fields"], req["required_table_columns"],
+            )
+            detected = {(i.field_name, i.cell_address) for i in items}
+            assert detected == self._KNOWN_GAPS[sheet], (
+                f"{sheet}: 期待 {self._KNOWN_GAPS[sheet]} に対し検出 {detected}"
+            )
+

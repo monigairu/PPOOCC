@@ -15,6 +15,7 @@ import re
 
 from apps.backend.app.api.models import ReviewItem
 from apps.backend.app.core.frame_config_loader import load_frame_config
+from apps.backend.app.core.settings import RERANK_GUARD_F2_THRESHOLD
 
 logger = logging.getLogger(__name__)
 
@@ -459,19 +460,25 @@ def _content_tokens(text: str) -> set[str]:
 
 
 def _record_relevant(submission_fee: str, rec: dict) -> bool:
-    """過去ナレッジ1件が本申請の費目に関連するか（種別非依存の関連性判定）。
+    """過去ナレッジ1件が本申請のレビュー文脈に関連するか（種別非依存の関連性判定）。
 
-    費目(fee_type)を持つレコード（F3）は費目語の重なりで判定する。費目列を
-    持たない NuRO 内共有ナレッジ（F2）は、代わりに内容語（業務カテゴリ・事象概要・
-    メッセージ内容）と申請費目の語の重なりで判定する。いずれも `_fee_tokens` の
-    連続2文字トークンで突合し、費目名をハードコードしない一般則。
+    費目(fee_type)を持つレコード（F3）は申請費目との費目語の重なりで判定する。費目列を
+    持たない NuRO 内共有ナレッジ（F2）は、Reranking の意味スコア（`_rerank_score`）が
+    あればそれを優先し、無ければ内容語（業務カテゴリ・事象概要・メッセージ内容）と
+    申請費目の語の重なりで判定する。いずれも費目名をハードコードしない一般則。
+
+    関連の基準（重要）：F2 のスコアは検索クエリ（`build_search_query`＝**費目＋工事件名**、
+    §1-7 で「同じ工事の話題違い事例」も surfacing させるため意図的に広げている）に対する
+    関連度である。したがって F2 では「申請費目そのもの」だけでなく **同一工事のNuRO内知見も
+    関連とみなす**（これは意図した挙動＝同じ工事の申請レビューに、その工事のNuRO知見を根拠に
+    してよい）。全く別工事・別費目の無関係レコードはスコアが低く閾値で除外される（難4を担保）。
 
     Args:
         submission_fee: 本申請の費目（対象費目1/2 のいずれか）。
         rec: 検索で得たナレッジ1件（費目フィールドの有無で判定方法を切り替える）。
 
     Returns:
-        本申請に関連するとみなせれば True。関連が辿れなければ False（＝根拠不採用の対象）。
+        本申請のレビュー文脈に関連するとみなせれば True。関連が辿れなければ False（＝根拠不採用の対象）。
     """
     # 費目フィールド（fee_type / cost_category）を持つレコード＝F3系。
     # 値が空でも「費目を持つ様式なのに未記入」であり、内容語へフォールバックせず
@@ -479,7 +486,13 @@ def _record_relevant(submission_fee: str, rec: dict) -> bool:
     if "fee_type" in rec or "cost_category" in rec:
         fee = str(rec.get("fee_type") or rec.get("cost_category") or "").strip()
         return _fee_related(submission_fee, fee)
-    # 費目フィールド自体を持たないナレッジ（F2＝NuRO内共有・費目横断）のみ内容語で判定
+    # 以降は費目フィールドを持たないナレッジ（F2＝NuRO内共有・費目横断）。
+    # Reranking の意味スコア（検索クエリ＝費目＋工事件名 への関連度）で字面でなく意味で判定
+    # （§1-18 の偽陽性を排除）。例：申請「放射線管理費」に対し内容に「放射性廃棄物」を含むF2は、
+    # 2文字"放射"では一致してしまうがクロスエンコーダのスコアは低く、閾値で正しく不採用にできる。
+    if "_rerank_score" in rec:
+        return float(rec.get("_rerank_score") or 0.0) >= RERANK_GUARD_F2_THRESHOLD
+    # スコアが無い場合（Reranking 無効・API失敗）は内容語トークンへフォールバック
     content = " ".join(
         str(rec.get(k, "")) for k in ("business_category", "phenomenon_summary", "message_content")
     )
@@ -518,6 +531,18 @@ def apply_relevance_guard(
         for i, r in enumerate(recs, 1):
             ref_relevant[f"{prefix}#{i}"] = _record_relevant(submission_fee, r)
 
+    # F2 が1件も関連判定されなかった場合の観測ログ（silently な回帰の早期検知）。
+    # F2 grounding は Reranking スコア閾値で判定するため、モデル更新やコーパス変化で
+    # スコア分布がずれると全 F2 が閾値未満に落ち、F2根拠が無音で消える（#17 と同型の回帰）。
+    f2_total = len(f2_knowledge)
+    f2_relevant = sum(1 for k, v in ref_relevant.items() if k.startswith("F2#") and v)
+    if f2_total and not f2_relevant:
+        logger.warning(
+            "関連性ガード: F2ナレッジ %d 件すべてが関連なし判定（費目=%r）。"
+            "Reranking のモデル/閾値ずれで F2 grounding が無音で消えていないか要確認",
+            f2_total, submission_fee,
+        )
+
     for it in items:
         src = it.knowledge_source or ""
         if "F3" not in src and "F2" not in src:
@@ -525,9 +550,353 @@ def apply_relevance_guard(
         refs = re.findall(r"(F2|F3own|F3all)#(\d+)", it.evidence or "")
         # 引用が本申請に整合しない（または引用が辿れない）なら根拠を外す
         if not any(ref_relevant.get(f"{p}#{n}", False) for p, n in refs):
+            logger.info(
+                "関連性ガード: 指摘の根拠を不採用に降格（src=%s evidence_refs=%s）",
+                src, [f"{p}#{n}" for p, n in refs],
+            )
             it.knowledge_source = "AI知見"
             it.severity = "要確認"
             it.evidence = "AI判断（本申請に整合する過去事例なし・根拠を不採用）"
+    return items
+
+
+def _field_anchor_map(frame_name: str, sheet_name: str, kubun: str) -> dict[str, tuple[str, set[str]]]:
+    """様式定義（config）から field_name → (推奨セル, 全候補セル集合) の解決マップを作る。
+
+    label_value 項目は単一セル。plan_actual 項目は計画セル(G列)と実績セル(K列)を持つため、
+    計画実績区分に応じて推奨セルを選ぶ（計画→plan列／実績→actual列）。費目・セルを
+    ハードコードせず、様式定義に書かれた対応のみを使う。表(tabular)は対象外（値のある
+    セルが mappings に載り番地は元々正しいため）。
+
+    Args:
+        frame_name: 様式名（例 "frameB"）。
+        sheet_name: シート名（例 "MRC1"）。
+        kubun: 計画実績区分の値（"計画"/"実績"）。実績なら actual セルを推奨する。
+
+    Returns:
+        {field_name: (推奨セル番地, {定義セル番地...})}。config が読めなければ空 dict。
+    """
+    try:
+        config = load_frame_config(frame_name, sheet_name)
+    except Exception:  # noqa: BLE001 - config欠如時は補正しない（安全側）
+        return {}
+    prefer_actual = str(kubun).strip() == "実績"
+    result: dict[str, tuple[str, set[str]]] = {}
+
+    def _register(field: str, preferred: str, cells: set[str]) -> None:
+        # 同一 field が複数セクションに定義される場合（例：炉型＝C7 と G9/K9）は候補を
+        # 累積（和集合）し、推奨セルは最初に見つかった定義を維持する。こうしないと
+        # 後勝ち上書きで有効セルが消え、正しく付いた番地まで誤補正してしまう。
+        if field not in result:
+            result[field] = (preferred, set(cells))
+        else:
+            prev_pref, prev_cells = result[field]
+            result[field] = (prev_pref, prev_cells | cells)
+
+    for section in config.get("sections", []):
+        stype = section.get("type")
+        for field_name, cell_info in section.get("fields", {}).items():
+            if stype == "label_value":
+                cell = str(cell_info)
+                _register(field_name, cell, {cell})
+            elif stype == "plan_actual" and isinstance(cell_info, dict):
+                plan = str(cell_info.get("plan", "") or "")
+                actual = str(cell_info.get("actual", "") or "")
+                candidates = {c for c in (plan, actual) if c}
+                if not candidates:
+                    continue
+                preferred = (actual or plan) if prefer_actual else (plan or actual)
+                _register(field_name, preferred, candidates)
+    return result
+
+
+def reanchor_review_items(
+    items: list[ReviewItem],
+    frame_name: str,
+    sheet_name: str,
+    mappings: list[dict],
+) -> list[ReviewItem]:
+    """LLMが付けたセル番地を様式定義で検証し、ズレていれば正しい番地へ補正する。
+
+    空欄フィールド（値が無く mappings に載らない項目）への指摘は、LLM がその番地を
+    知らず可視セルへ誤爆することがある（例：実施費用低減策の指摘が工事件名 C6 に付く）。
+    field_name が様式定義に一致し、かつ LLM の cell_address がその定義セルに含まれない
+    場合のみ、計画実績区分に応じた正しいセルへ補正する。**定義に無い field_name
+    （表フィールド・LLMの言い換え）は一切触らない**（元番地が正しいことが多く、
+    誤った上書きで別バグを作らないための安全側）。特定費目・セルはハードコードしない。
+
+    Args:
+        items: パース済みのレビュー指摘リスト。
+        frame_name: 様式名。
+        sheet_name: シート名。
+        mappings: 転記結果 mappings（計画実績区分の取得に使う）。
+
+    Returns:
+        cell_address を必要に応じ補正した items（同一リストを in-place 更新して返す）。
+    """
+    kubun = next(
+        (str(m.get("value", "")).strip() for m in mappings
+         if m.get("field_name") == "計画実績区分" and str(m.get("value", "")).strip()),
+        "",
+    )
+    anchor_map = _field_anchor_map(frame_name, sheet_name, kubun)
+    if not anchor_map:
+        return items
+    for it in items:
+        entry = anchor_map.get(it.field_name)
+        if not entry:
+            continue  # 様式定義に無い field は温存（表・言い換え）
+        preferred, candidates = entry
+        if it.cell_address not in candidates:
+            logger.info(
+                "番地補正: 指摘『%s』の番地を %r→%r に是正（様式定義に基づく）",
+                it.field_name, it.cell_address, preferred,
+            )
+            it.cell_address = preferred
+    return items
+
+
+# LLMが引用する参照番号（[F3own#18] 等）。角括弧は任意（LLMの表記ゆれ許容）。
+# 種別は apply_relevance_guard と同一（F2/F3own/F3all）に揃える。
+_REF_TOKEN_RE = re.compile(r"\[?(F2|F3own|F3all)#(\d+)\]?")
+
+# カンマ等で連結された参照番号の連なり（例 "[F3own#1], [F3own#2]、[F3all#4]"）。
+# 1個以上のトークンを区切り（,、，）で結んだ範囲をまとめて捕捉し、範囲内で重複を畳む。
+_REF_RUN_RE = re.compile(
+    r"\[?(?:F2|F3own|F3all)#\d+\]?"
+    r"(?:\s*[,、，]\s*\[?(?:F2|F3own|F3all)#\d+\]?)*"
+)
+
+
+def _ref_source_label(prefix: str, record: dict) -> str:
+    """参照番号1件を、ユーザーに伝わる出典表記へ変換する。
+
+    参照番号は「その回の検索結果の並び順」でしかなく画面上では意味を持たないため、
+    レコードが実際に持つ由来情報（由来シート・公式ver5.3メッセージID・電力会社名）で
+    出典を示す。メッセージIDはナレッジExcelに実在する行の特定子。
+
+    メッセージIDは `_doc_id`（Vertex 文書ID＝ingest 時の id_field="message_id"＝
+    通し連番 {id}_{seq:02d}）を正とする。struct_data の `message_id` 列は索引に載らず
+    レコードに現れないため、`id`（スレッド基底ID・同スレッドの複数メッセージで共通）に
+    落とすと別メッセージが同一表記に潰れる。順序は _doc_id → message_id → id。
+
+    Args:
+        prefix: 参照種別（"F2" / "F3own" / "F3all"）。
+        record: 検索ヒットしたナレッジレコード（ver5.3平坦化行）。
+
+    Returns:
+        出典表記（例 "【F3ナレッジ（自社：関東電力）｜シートKNI_1G_01｜メッセージID 03_KT_1G_01_0003_03】"）。
+        由来情報が全く取れない場合は空文字（呼び出し側で原文温存）。
+    """
+    sheet = str(record.get("sheet_name", "") or "").strip()
+    msg_id = str(
+        record.get("_doc_id", "")
+        or record.get("message_id", "")
+        or record.get("id", "")
+        or ""
+    ).strip()
+    if prefix == "F2":
+        source = "F2ナレッジ（NuRO内知見）"
+    else:
+        scope = "自社" if prefix == "F3own" else "他社"
+        utility = str(record.get("utility_name", "") or "").strip()
+        source = f"F3ナレッジ（{scope}：{utility}）" if utility else f"F3ナレッジ（{scope}）"
+    details = [d for d in (f"シート{sheet}" if sheet else "", f"メッセージID {msg_id}" if msg_id else "") if d]
+    if not details:
+        return ""
+    return "【" + "｜".join([source, *details]) + "】"
+
+
+def humanize_evidence_refs(
+    items: list[ReviewItem],
+    f2_knowledge: list[dict],
+    f3_own: list[dict],
+    f3_all: list[dict],
+) -> list[ReviewItem]:
+    """指摘文中の参照番号（[F3own#N] 等）をナレッジの実出典表記へ置換する。
+
+    決定論の文字列置換のみ（LLM再呼び出しなし・ハードコードなし）。番号→レコードの
+    対応は _number_records と同じ「リストの並び順（1始まり）」を使う。解決できない
+    参照（範囲外・由来情報なし）は原文のまま温存する（安全側）。カンマ等で連なった
+    参照は連なり単位で処理し、同一出典表記になるものは順序を保って1件に畳む。
+
+    **必ず apply_relevance_guard の後に呼ぶこと**。ガードは参照番号の字面
+    （F3own#N 等）で誤groundingを判定するため、先に置換すると判定が壊れる。
+
+    Args:
+        items: パース済みのレビュー指摘リスト。
+        f2_knowledge: プロンプトに渡した F2 レコード（[F2#N] の並び順そのまま）。
+        f3_own: プロンプトに渡した F3 自社レコード（[F3own#N] の並び順そのまま）。
+        f3_all: プロンプトに渡した F3 他社レコード（[F3all#N] の並び順そのまま）。
+
+    Returns:
+        comment / evidence の参照番号を出典表記に置換した items
+        （同一リストを in-place 更新して返す）。
+    """
+    records_by_prefix = {"F2": f2_knowledge, "F3own": f3_own, "F3all": f3_all}
+
+    def _resolve(prefix: str, num: int) -> str:
+        """参照番号1件を出典表記へ。辿れない/由来なしは元トークンを返す。"""
+        records = records_by_prefix[prefix]
+        if not 1 <= num <= len(records):
+            return f"[{prefix}#{num}]"
+        return _ref_source_label(prefix, records[num - 1]) or f"[{prefix}#{num}]"
+
+    def _replace_run(match: re.Match) -> str:
+        # 連なり内の各参照を出典表記に変換し、同一表記を順序保持で1件に畳む。
+        # （同じ事例を複数番号で引くと同一メッセージIDが並ぶため）
+        rendered: list[str] = []
+        for tok in _REF_TOKEN_RE.finditer(match.group(0)):
+            label = _resolve(tok.group(1), int(tok.group(2)))
+            if label not in rendered:
+                rendered.append(label)
+        return ", ".join(rendered)
+
+    for it in items:
+        if it.evidence:
+            it.evidence = _REF_RUN_RE.sub(_replace_run, it.evidence)
+        if it.comment:
+            it.comment = _REF_RUN_RE.sub(_replace_run, it.comment)
+    return items
+
+
+_TABLE_CELL_RE = re.compile(r"^([A-Z]+)(\d+)$")
+
+
+def _is_filled(value) -> bool:
+    """転記値が「記載あり」とみなせるかを返す（None・空白のみは空欄扱い。0 は記載あり）。"""
+    return value is not None and str(value).strip() != ""
+
+
+def _generate_missing_entry_items(
+    mappings: list[dict],
+    frame_name: str,
+    sheet_name: str,
+    required_fields: list[str],
+    required_table_columns: dict,
+) -> list[ReviewItem]:
+    """記載必須欄の空欄を検出し「記入してください」指摘を生成する（決定論ルール）。
+
+    LLMに空欄項目を渡す方式は過検出のため不採用（RAG_VERIFICATION §1-20）。代わりに
+    criteria YAML の opt-in 宣言（load_required_entries）と様式定義（config）だけを
+    拠り所に、確定的に検出する。特定費目・セルはハードコードしない。
+
+    基本情報系（label_value / plan_actual）：
+      セル解決は _field_anchor_map を再利用（計画実績区分で G/K を選択）。
+      「mappings に空値で載っている」「mappings に載っていない（未転記）」の両方を空欄とする。
+      様式定義に無い必須宣言（設定ミス・別様式の宣言）は黙ってスキップ（安全側）。
+
+    表（tabular）：
+      行数は工事ごとに変わるため、アクティブ行＝「mappings 上で表の列に非空値がある行」を
+      番地の算術（列文字＋行番号）で導出し、必須列×アクティブ行の空セルを検出する。
+      指摘は列単位で1件に集約（1空セル1件だと表で過剰になるため）。
+
+    Args:
+        mappings: 転記結果 mappings（{field_name, cell_address, value, ...}）。
+        frame_name: 様式名（例 "frameB"）。
+        sheet_name: シート名（例 "MRC1"）。
+        required_fields: 記載必須のフィールド名リスト（criteria YAML 由来）。
+        required_table_columns: {表セクション名: {"共通"/"計画"/"実績": [列名...]}}。
+
+    Returns:
+        空欄指摘の ReviewItem リスト。宣言が空・全欄記載済みなら空リスト。
+    """
+    items: list[ReviewItem] = []
+    if not required_fields and not required_table_columns:
+        return items
+
+    kubun = next(
+        (str(m.get("value", "")).strip() for m in mappings
+         if m.get("field_name") == "計画実績区分" and str(m.get("value", "")).strip()),
+        "",
+    )
+
+    filled_fields = {m.get("field_name") for m in mappings if _is_filled(m.get("value"))}
+    filled_cells = {m.get("cell_address") for m in mappings if _is_filled(m.get("value"))}
+
+    # ── 基本情報系：様式定義のセル解決で空欄を検出 ──────────────────────────
+    if required_fields:
+        anchor_map = _field_anchor_map(frame_name, sheet_name, kubun)
+        for field in required_fields:
+            entry = anchor_map.get(field)
+            if not entry:
+                continue  # 様式定義に無い宣言は補正しない（設定ミス保護）
+            preferred, candidates = entry
+            if field in filled_fields or (candidates & filled_cells):
+                continue
+            items.append(ReviewItem(
+                item_id="",
+                field_name=field,
+                cell_address=preferred,
+                severity="要確認",
+                comment=f"「{field}」が空欄です。記入してください。",
+                evidence="AI判断（ナレッジ参照なし）：様式定義上の記載必須欄が空欄",
+                knowledge_source="AI知見",
+            ))
+
+    # ── 表：アクティブ行（転記済み行）×必須列で空欄を検出 ──────────────────
+    if required_table_columns:
+        try:
+            config = load_frame_config(frame_name, sheet_name)
+        except Exception:  # noqa: BLE001 - config欠如時はチェックしない（安全側）
+            return items
+        for section in config.get("sections", []):
+            if section.get("type") != "tabular":
+                continue
+            sec_name = str(section.get("name", ""))
+            req = required_table_columns.get(sec_name)
+            if not req:
+                continue
+            col_by_name = {
+                str(c.get("name", "")): str(c.get("column", "")).upper()
+                for c in section.get("columns", []) if c.get("column")
+            }
+            group = "実績" if kubun == "実績" else "計画"
+            wanted = list(req.get("共通") or []) + list(req.get(group) or [])
+            pairs = [(name, col_by_name[name]) for name in wanted if col_by_name.get(name)]
+            if not pairs:
+                continue
+
+            data_start = int(section.get("data_start_row") or 0)
+            total_row = section.get("total_row")
+            table_letters = set(col_by_name.values())
+
+            # アクティブ行と、表セル（列文字, 行番号）→記載有無 を mappings から導出
+            active_rows: set[int] = set()
+            cell_filled: dict[tuple[str, int], bool] = {}
+            for m in mappings:
+                match = _TABLE_CELL_RE.match(str(m.get("cell_address", "") or ""))
+                if not match:
+                    continue
+                letter, row = match.group(1), int(match.group(2))
+                if letter not in table_letters or row < data_start:
+                    continue
+                if total_row is not None and row == int(total_row):
+                    continue
+                filled = _is_filled(m.get("value"))
+                cell_filled[(letter, row)] = cell_filled.get((letter, row), False) or filled
+                if filled:
+                    active_rows.add(row)
+
+            for col_name, letter in pairs:
+                empty_addrs = [
+                    f"{letter}{row}" for row in sorted(active_rows)
+                    if not cell_filled.get((letter, row), False)
+                ]
+                if not empty_addrs:
+                    continue
+                items.append(ReviewItem(
+                    item_id="",
+                    field_name=f"{sec_name}_{col_name}",
+                    cell_address=empty_addrs[0],
+                    severity="要確認",
+                    comment=(
+                        f"{sec_name}の「{col_name}」列に空欄があります"
+                        f"（{', '.join(empty_addrs)}）。記入するか、対象外の理由を記載してください。"
+                    ),
+                    evidence="AI判断（ナレッジ参照なし）：転記済みの表行に記載必須列の空欄",
+                    knowledge_source="AI知見",
+                ))
     return items
 
 

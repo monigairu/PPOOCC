@@ -40,6 +40,8 @@ from google.api_core.exceptions import GoogleAPICallError
 from apps.backend.app.core.settings import (
     GCP_LOCATION,
     GCP_PROJECT_ID,
+    RERANK_ENABLED,
+    RERANK_MODEL,
     VERTEX_SEARCH_F2_DATASTORE_ID,
     VERTEX_SEARCH_F3_BQ_DATASTORE_ID,
     VERTEX_SEARCH_F3_BQ_ENGINE_ID,
@@ -54,6 +56,7 @@ logger = logging.getLogger(__name__)
 
 # ── Vertex AI Search クライアント（遅延初期化・シングルトン）──────────────────
 _search_client: discoveryengine.SearchServiceClient | None = None
+_rank_client: discoveryengine.RankServiceClient | None = None
 
 
 def _get_search_client() -> discoveryengine.SearchServiceClient:
@@ -61,6 +64,13 @@ def _get_search_client() -> discoveryengine.SearchServiceClient:
     if _search_client is None:
         _search_client = discoveryengine.SearchServiceClient()
     return _search_client
+
+
+def _get_rank_client() -> discoveryengine.RankServiceClient:
+    global _rank_client
+    if _rank_client is None:
+        _rank_client = discoveryengine.RankServiceClient()
+    return _rank_client
 
 
 # ── 内部ユーティリティ ────────────────────────────────────────────────────────
@@ -160,10 +170,82 @@ def _search(
 
     try:
         response = client.search(request=request)
-        return [_to_record(r) for r in response.results]
+        records = [_to_record(r) for r in response.results]
     except GoogleAPICallError as e:
         logger.error("Vertex AI Search エラー（datastore=%s）: %s", datastore_id, e)
         return []
+
+    # ハイブリッド検索の結果を semantic-ranker で関連度順に並べ替え（§3-2・Step5）
+    return _rerank(effective_query, records)
+
+
+def _rerank(query: str, records: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """検索結果を Ranking API（semantic-ranker）で関連度順に並べ替える。
+
+    Agent Search のハイブリッド検索は件数増加で関連レコードを上位から取りこぼすため、
+    クロスエンコーダの意味スコアで並べ替えて surfacing を底上げする（§3-2 採用方針）。
+    並べ替えのみで**件数は削らない**（下流の件数期待・炉型後段フィルタと互換）。
+    付与した `_rerank_score`（0〜1）は関連性ガードの F2 判定にも使う（§1-18）。
+
+    Args:
+        query: 検索クエリ（費目＋工事件名など。RankRequest.query に渡す）。
+        records: `_to_record` が返した検索結果のリスト（`message_content` を持つ）。
+
+    Returns:
+        `_rerank_score` を付与し関連度降順に並べ替えたレコードのリスト。
+        Reranking 無効・レコード0件・API エラー時は入力を（スコア付与せず）そのまま返す
+        ＝検索を止めないフォールバック。
+    """
+    if not RERANK_ENABLED or not records or not GCP_PROJECT_ID:
+        return records
+
+    client = _get_rank_client()
+    ranking_config = client.ranking_config_path(
+        project=GCP_PROJECT_ID,
+        location=GCP_LOCATION,
+        ranking_config="default_ranking_config",
+    )
+    # 検索対象テキスト。message_content（F2/F3）が無い補足資料（Tool4）は caption を使う。
+    ranking_records = [
+        discoveryengine.RankingRecord(
+            id=str(i),
+            title=str(r.get("construction_name") or r.get("title") or ""),
+            content=str(r.get("message_content") or r.get("text_content") or r.get("caption") or ""),
+        )
+        for i, r in enumerate(records)
+    ]
+    try:
+        response = client.rank(
+            request=discoveryengine.RankRequest(
+                ranking_config=ranking_config,
+                model=RERANK_MODEL,
+                top_n=len(records),          # 並べ替えのみ・件数は削らない
+                query=query,                 # 呼び出し元（_search）で空クエリは既に補完済み
+                records=ranking_records,
+            )
+        )
+    except GoogleAPICallError as e:
+        logger.warning("Ranking API エラー（並べ替えをスキップ）: %s", e)
+        return records
+
+    # 応答の id（入力インデックス）で並べ替える。各インデックスは1回だけ採用し、
+    # 重複id・範囲外id（負数含む）は無視する＝二重採用・取りこぼしを防ぐ。
+    reranked: list[dict[str, Any]] = []
+    consumed: set[int] = set()
+    for rr in response.records:
+        try:
+            idx = int(rr.id)
+        except ValueError:
+            continue
+        if idx < 0 or idx >= len(records) or idx in consumed:
+            continue
+        consumed.add(idx)
+        records[idx]["_rerank_score"] = float(rr.score)
+        reranked.append(records[idx])
+    # 応答に含まれなかったレコードは末尾に元順で温存（件数は削らない）
+    if len(consumed) != len(records):
+        reranked.extend(records[i] for i in range(len(records)) if i not in consumed)
+    return reranked
 
 
 def _to_record(result: discoveryengine.SearchResponse.SearchResult) -> dict[str, Any]:
