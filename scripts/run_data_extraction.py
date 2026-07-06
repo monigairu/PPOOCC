@@ -97,11 +97,12 @@ def main() -> None:
         from apps.backend.app.pipelines.form_generation_pipeline import (
             run_form_generation,
         )
-        from apps.backend.app.config.path import template_workbook_path
+        from apps.backend.app.config.paths import template_workbook_path
+        from apps.backend.app.core.settings import OUTPUT_DIR, CACHE_DIR
 
         template_path = str(template_workbook_path())
-        result_path = f"data/form_generation/output/result_{args.sheet}_extracted.xlsx"
-        cache_path = f"data/form_generation/cache/mapping_cache_{args.sheet}.json"
+        result_path = str(OUTPUT_DIR / f"result_{args.sheet}_extracted.xlsx")
+        cache_path = str(CACHE_DIR / f"mapping_cache_{args.sheet}.json")
 
         run_form_generation(
             source_json_path=data_only_path,

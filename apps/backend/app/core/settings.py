@@ -10,7 +10,7 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
-from apps.backend.app.config.path import template_workbook_path
+from apps.backend.app.config.paths import template_workbook_path
 
 load_dotenv()
 

@@ -2,7 +2,7 @@
 excel_io.py と cell_writer.py の動作確認用スクリプト
 
 使い方:
-    python scripts/test_excel_io.py
+    python scripts/check_excel_io.py
 """
 from apps.backend.app.core.excel_io import (
     load_workbook_file,
@@ -10,7 +10,7 @@ from apps.backend.app.core.excel_io import (
     copy_excel_file,
 )
 from apps.backend.app.core.cell_writer import write_to_cell, get_cell_value
-from apps.backend.app.config.path import template_workbook_path
+from apps.backend.app.config.paths import template_workbook_path
 
 
 def main():

@@ -10,7 +10,8 @@ import argparse
 from dotenv import load_dotenv
 
 from apps.backend.app.pipelines.form_generation_pipeline import run_form_generation
-from apps.backend.app.config.path import template_workbook_path
+from apps.backend.app.config.paths import template_workbook_path
+from apps.backend.app.core.settings import OUTPUT_DIR, CACHE_DIR
 
 
 def main() -> None:
@@ -42,12 +43,8 @@ def main() -> None:
     # パス設定（シート名・様式名は引数から取得）
     source_json_path = args.input
     template_excel_path = str(template_workbook_path())
-    result_excel_path = (
-        f"data/form_generation/output/result_{args.sheet}.xlsx"
-    )
-    cache_path = (
-        f"data/form_generation/cache/mapping_cache_{args.sheet}.json"
-    )
+    result_excel_path = str(OUTPUT_DIR / f"result_{args.sheet}.xlsx")
+    cache_path = str(CACHE_DIR / f"mapping_cache_{args.sheet}.json")
 
     run_form_generation(
         source_json_path=source_json_path,

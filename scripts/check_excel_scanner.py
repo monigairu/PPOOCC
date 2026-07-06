@@ -2,13 +2,13 @@
 excel_scanner.py の動作確認用スクリプト
 
 使い方:
-    python scripts/test_excel_scanner.py
+    python scripts/check_excel_scanner.py
 """
 import json
 
 from apps.backend.app.core.excel_io import load_workbook_file
 from apps.backend.app.core.excel_scanner import scan_label_cells
-from apps.backend.app.config.path import template_workbook_path
+from apps.backend.app.config.paths import template_workbook_path
 
 
 def main():

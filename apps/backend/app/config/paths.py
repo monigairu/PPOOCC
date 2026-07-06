@@ -34,7 +34,7 @@ PER_JOB_RULESETS_ROOT = DATA_ROOT / "rulesets"
 
 LEGACY_RULEBOOKS_ROOT = KNOWLEDGE_ROOT / "legacy_rulebooks"
 EXTRACTION_SCHEMA_ROOT = KNOWLEDGE_ROOT / "extraction_schema"
-FORM_GENERATION_ARTIFACTS_ROOT = ARTIFACTS_ROOT / "form_generation"
+FORM_GENERATION_ARTIFACTS_ROOT = DATA_ROOT / "form_generation"
 
 
 def frame_config_path(frame_name: str, sheet_name: str) -> Path:

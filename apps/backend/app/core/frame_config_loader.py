@@ -7,7 +7,7 @@ config/{frame_name}/{sheet_name}.yaml を読み込み、
 """
 import yaml
 
-from apps.backend.app.config.path import CONFIG_ROOT, FRAMES_CONFIG_ROOT
+from apps.backend.app.config.paths import CONFIG_ROOT, FRAMES_CONFIG_ROOT
 
 # 様式定義の探索先（path.py 一元管理）。
 # config/frames/{frame}/ を正とし、config/{frame}/ 直下は後方互換で探索する。
