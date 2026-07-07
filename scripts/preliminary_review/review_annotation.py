@@ -9,7 +9,7 @@ NuRO用 アノテーション出力スクリプト
 （configを書き換えれば内容を差し替え可能・本スクリプトは不変）。
 
 実行：
-    uv run python scripts/review_annotation.py \
+    uv run python scripts/preliminary_review/review_annotation.py \
         --excel data/form_generation/output/転記結果_frameB_関東電力.xlsx --sheets MRC1,MRC2
 
 出力：data/review_eval/annotations/{申請名}_{日時}.md（コミット対象。NuROが○×記入して返す）
@@ -22,16 +22,16 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).parent.parent))
+sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 import yaml
 
 # Excel→mappings復元・クエリ文脈導出は result_reader が正本（verify_rag経由の間接importは廃止）
-from apps.backend.app.agents.reviewer.result_reader import (
+from apps.backend.app.preliminary_review.knowledge.result_reader import (
     reconstruct_mappings_from_excel,
     derive_query_context,
 )
-from apps.backend.app.agents.reviewer import reviewer_agent
+from apps.backend.app.preliminary_review import agent as reviewer_agent
 
 GOLD_FILE = Path("data/review_eval/gold_expectations.yaml")
 OUT_DIR = Path("data/review_eval/annotations")

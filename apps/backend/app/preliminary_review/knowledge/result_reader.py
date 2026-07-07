@@ -6,7 +6,7 @@
 cell_writer の逆操作にあたる。
 
 利用元:
-  - scripts/verify_rag.py（RAG検証ハーネス）
+  - scripts/preliminary_review/verify_rag.py（RAG検証ハーネス）
   - api/routes/review.py（様式Excelをアップロードしてレビューする入口）
 
 knowledge_loader（検索バックエンド）・_excel_reader（F2/F3ナレッジ読み込み）とは独立。
@@ -106,7 +106,7 @@ def _add_tabular(section: dict, ws, add) -> None:
 def _derive_queries(mappings: list[dict]) -> dict[str, str | None]:
     """run_review と同じロジックで RAG クエリ用フィールドを取り出す。"""
     # 循環インポート回避のため遅延 import
-    from apps.backend.app.agents.reviewer import reviewer_agent
+    from apps.backend.app.preliminary_review import agent as reviewer_agent
     return {
         "fee_type":     reviewer_agent._extract_field(mappings, "対象費目1"),
         "reactor_type": reviewer_agent._extract_field(mappings, "炉型"),

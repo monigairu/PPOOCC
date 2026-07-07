@@ -2,13 +2,13 @@
 F2/F3/補足資料ナレッジを Vertex AI Search データストアへ投入するスクリプト
 
 実行方法:
-    uv run python scripts/ingest_knowledge.py                    # F2・F3両方
-    uv run python scripts/ingest_knowledge.py --target f2
-    uv run python scripts/ingest_knowledge.py --target f3
-    uv run python scripts/ingest_knowledge.py --target supplement  # Phase 3
-    uv run python scripts/ingest_knowledge.py --target f3 --backend bigquery
-    uv run python scripts/ingest_knowledge.py --target f2 --backend bigquery
-    uv run python scripts/ingest_knowledge.py --backend bigquery            # F2・F3両方
+    uv run python scripts/preliminary_review/ingest_knowledge.py                    # F2・F3両方
+    uv run python scripts/preliminary_review/ingest_knowledge.py --target f2
+    uv run python scripts/preliminary_review/ingest_knowledge.py --target f3
+    uv run python scripts/preliminary_review/ingest_knowledge.py --target supplement  # Phase 3
+    uv run python scripts/preliminary_review/ingest_knowledge.py --target f3 --backend bigquery
+    uv run python scripts/preliminary_review/ingest_knowledge.py --target f2 --backend bigquery
+    uv run python scripts/preliminary_review/ingest_knowledge.py --backend bigquery            # F2・F3両方
         # ver5.3 平坦形式で BigQuery（データ置き場）へロード→Agent Search索引まで（§0-7 R3）
         # Excel(正本) → 平坦化 → BigQuery → Agent Search索引
 
@@ -37,25 +37,27 @@ import time
 from pathlib import Path
 from typing import Any
 
-sys.path.insert(0, str(Path(__file__).parent.parent))
+sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 from google.cloud import discoveryengine_v1 as discoveryengine
 from google.protobuf import struct_pb2
 
-from apps.backend.app.agents.reviewer._excel_reader import (
+from apps.backend.app.preliminary_review.knowledge.excel_reader import (
     VER53_SCHEMA,
     excel_to_bq_input,
     read_all_f2,
     read_all_f3,
 )
-from apps.backend.app.agents.reviewer.knowledge_loader import normalize_utility
+from apps.backend.app.preliminary_review.knowledge.knowledge_loader import normalize_utility
 from apps.backend.app.core.settings import (
+    GCP_LOCATION,
+    GCP_PROJECT_ID,
+)
+from apps.backend.app.preliminary_review.config import (
     BIGQUERY_DATASET_ID,
     BIGQUERY_F2_TABLE_ID,
     BIGQUERY_F3_TABLE_ID,
     BIGQUERY_LOCATION,
-    GCP_LOCATION,
-    GCP_PROJECT_ID,
     VERTEX_SEARCH_F2_BQ_DATASTORE_ID,
     VERTEX_SEARCH_F2_DATASTORE_ID,
     VERTEX_SEARCH_F3_BQ_DATASTORE_ID,

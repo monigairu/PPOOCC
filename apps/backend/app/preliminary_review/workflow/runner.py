@@ -25,8 +25,8 @@ from google.adk.sessions import InMemorySessionService
 from google.adk.workflow import FunctionNode, JoinNode, START, Workflow
 from google.genai import types
 
-from apps.backend.app.agents.reviewer.adk import state_keys as K
-from apps.backend.app.agents.reviewer.adk.agents import (
+from apps.backend.app.preliminary_review.workflow import state_keys as K
+from apps.backend.app.preliminary_review.workflow.nodes import (
     f2_knowledge_node,
     f3_own_knowledge_node,
     f3_all_knowledge_node,

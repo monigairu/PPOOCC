@@ -35,9 +35,9 @@ from pathlib import Path
 
 from langfuse import observe
 
-from apps.backend.app.agents.reviewer.adk import state_keys as K
-from apps.backend.app.agents.reviewer.adk.runner import run_workflow
-from apps.backend.app.agents.reviewer._review_logic import (
+from apps.backend.app.preliminary_review.workflow import state_keys as K
+from apps.backend.app.preliminary_review.workflow.runner import run_workflow
+from apps.backend.app.preliminary_review.review_logic import (
     detect_plan_diff,
     _evaluate_diff,
     _to_number,
@@ -47,17 +47,17 @@ from apps.backend.app.agents.reviewer._review_logic import (
     _parse_review_response,
     build_search_query,
 )
-from apps.backend.app.agents.reviewer.result_reader import (
+from apps.backend.app.preliminary_review.knowledge.result_reader import (
     reconstruct_mappings_from_excel,
     derive_query_context,
 )
-from apps.backend.app.api.models import ReviewItem
+from apps.backend.app.preliminary_review.models import ReviewItem
 from apps.backend.app.core.frame_config_loader import list_frame_sheets
 
 logger = logging.getLogger(__name__)
 
-# テストコードが `from reviewer_agent import detect_plan_diff` でインポートしているため
-# _review_logic からの re-export を維持する（名前は変わらない）
+# テストコードが `from ...preliminary_review.agent import detect_plan_diff` でインポートしているため
+# review_logic からの re-export を維持する（名前は変わらない）
 __all__ = [
     "run_review",
     "review_workbook",

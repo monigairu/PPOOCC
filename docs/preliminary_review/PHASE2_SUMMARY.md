@@ -171,7 +171,7 @@ def read_all_f3() -> list[dict]
 ### create_datastores.py（一度だけ実行）
 
 ```bash
-uv run python scripts/create_datastores.py
+uv run python scripts/preliminary_review/create_datastores.py
 ```
 
 - F2・F3の2つのデータストアを Vertex AI Search に作成する
@@ -181,9 +181,9 @@ uv run python scripts/create_datastores.py
 ### ingest_knowledge.py（ナレッジ更新時に再実行）
 
 ```bash
-uv run python scripts/ingest_knowledge.py           # F2・F3両方
-uv run python scripts/ingest_knowledge.py --target f2
-uv run python scripts/ingest_knowledge.py --target f3
+uv run python scripts/preliminary_review/ingest_knowledge.py           # F2・F3両方
+uv run python scripts/preliminary_review/ingest_knowledge.py --target f2
+uv run python scripts/preliminary_review/ingest_knowledge.py --target f3
 ```
 
 **ドキュメント構造（Vertex AI Search への投入形式）：**

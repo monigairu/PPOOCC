@@ -18,7 +18,7 @@ from unittest.mock import MagicMock, patch, AsyncMock
 import pytest
 from fastapi.testclient import TestClient
 
-from apps.backend.app.agents.reviewer.reviewer_agent import detect_plan_diff, _evaluate_diff, _to_number
+from apps.backend.app.preliminary_review.agent import detect_plan_diff, _evaluate_diff, _to_number
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -158,25 +158,25 @@ class TestKnowledgeLoader:
 
     def test_f2_returns_empty_for_denryoku(self):
         """電力ロールは F2 ナレッジを参照できない"""
-        from apps.backend.app.agents.reviewer.knowledge_loader import load_f2
+        from apps.backend.app.preliminary_review.knowledge.knowledge_loader import load_f2
         result = load_f2(caller_role="電力")
         assert result == []
 
     def test_f2_returns_empty_list_when_no_file(self):
         """F2ファイルが存在しない場合は空リストを返す（エラーにならない）"""
-        from apps.backend.app.agents.reviewer.knowledge_loader import load_f2
+        from apps.backend.app.preliminary_review.knowledge.knowledge_loader import load_f2
         result = load_f2(caller_role="NuRO")
         assert isinstance(result, list)
 
     def test_f3_returns_empty_list_when_no_file(self):
         """F3ファイルが存在しない場合は空リストを返す（エラーにならない）"""
-        from apps.backend.app.agents.reviewer.knowledge_loader import load_f3
+        from apps.backend.app.preliminary_review.knowledge.knowledge_loader import load_f3
         result = load_f3(caller_role="NuRO", utility_name=None)
         assert isinstance(result, list)
 
     def test_f3_denryoku_requires_utility_name(self):
         """電力ロールで utility_name なしは空リストを返す"""
-        from apps.backend.app.agents.reviewer.knowledge_loader import load_f3
+        from apps.backend.app.preliminary_review.knowledge.knowledge_loader import load_f3
         result = load_f3(caller_role="電力", utility_name=None)
         assert result == []
 
@@ -186,7 +186,7 @@ class TestKnowledgeLoader:
         F3 は北の海電力(F3_knowledge.xlsx)4枚に加え、関東電力PoC評価用
         (F3_knowledge_関東電力.xlsx)4枚を追加したため計8枚。両系統が検出されることを確認する。
         """
-        from apps.backend.app.agents.reviewer._excel_reader import _discover_schemas
+        from apps.backend.app.preliminary_review.knowledge.excel_reader import _discover_schemas
         f3 = _discover_schemas("f3")
         f2 = _discover_schemas("f2")
         f3_files = {s.get("excel_file") for s in f3}
@@ -197,14 +197,14 @@ class TestKnowledgeLoader:
 
     def test_f3_schema_sheet_names(self):
         """F3スキーマのsheet_nameが正しい（Phase2: _excel_reader に移動）"""
-        from apps.backend.app.agents.reviewer._excel_reader import _discover_schemas
+        from apps.backend.app.preliminary_review.knowledge.excel_reader import _discover_schemas
         sheets = {s["sheet_name"] for s in _discover_schemas("f3")}
         assert sheets == {"KNI_1G_01", "KNI_1G_02", "KNI_1G_03", "KNI_2G"}
 
     def test_excel_reader_with_mock_data(self, tmp_path):
         """小さな実Excelファイルで読み込み処理を検証する（Phase2: _excel_reader に移動）"""
         from openpyxl import Workbook
-        from apps.backend.app.agents.reviewer._excel_reader import _read_excel_by_schema
+        from apps.backend.app.preliminary_review.knowledge.excel_reader import _read_excel_by_schema
 
         schema = {
             "layout": {"data_start_row": 1},
@@ -243,7 +243,7 @@ class TestKnowledgeLoader:
 
     def test_derive_reactor_type_map_lookup(self):
         """炉型導出：発電所キー＋号機上書きキーの優先順位（2026-07-02設計確定）"""
-        import apps.backend.app.agents.reviewer._excel_reader as xr
+        import apps.backend.app.preliminary_review.knowledge.excel_reader as xr
         original = xr._plant_reactor_map
         xr._plant_reactor_map = {"敦賀発電所": "BWR", "敦賀発電所/2号機": "PWR"}
         try:
@@ -261,7 +261,7 @@ class TestKnowledgeLoader:
         列を足さない）。plant_reactor_map.yaml のドメイン知識から導出するため、
         同一発電所・号機に複数の炉型が混ざることは構造的にありえない。
         """
-        from apps.backend.app.agents.reviewer._excel_reader import read_all_f3
+        from apps.backend.app.preliminary_review.knowledge.excel_reader import read_all_f3
         records = read_all_f3()
         with_plant = [r for r in records if r.get("plant_site")]
         assert with_plant, "該当発電所を持つF3レコードが読めない"
@@ -282,7 +282,7 @@ class TestKnowledgeLoader:
         片方のメッセージが silently 消失していた（実データで 271→158 件に減少）。
         通し連番 {id}_{seq} は読み順で各メッセージに一意番号を振る。
         """
-        from apps.backend.app.agents.reviewer._excel_reader import read_all_f2, read_all_f3
+        from apps.backend.app.preliminary_review.knowledge.excel_reader import read_all_f2, read_all_f3
         for label, records in (("F3", read_all_f3()), ("F2", read_all_f2())):
             assert records, f"{label}レコードが読めない"
             message_ids = [r["message_id"] for r in records]
@@ -293,7 +293,7 @@ class TestKnowledgeLoader:
     def test_excel_reader_adds_sheet_name(self, tmp_path):
         """スキーマに sheet_name があれば各レコードに由来シートが付く（ver5.3・Step1-1）"""
         from openpyxl import Workbook
-        from apps.backend.app.agents.reviewer._excel_reader import _read_excel_by_schema
+        from apps.backend.app.preliminary_review.knowledge.excel_reader import _read_excel_by_schema
 
         schema = {
             "sheet_name": "KNI_1G_01",
@@ -320,7 +320,7 @@ class TestKnowledgeLoader:
         を除くすべてが、各スキーマの fixed_columns に実在する。
         → schema YAML と VER53_SCHEMA の契約が乖離したらここで落ちる。
         """
-        from apps.backend.app.agents.reviewer._excel_reader import (
+        from apps.backend.app.preliminary_review.knowledge.excel_reader import (
             VER53_SCHEMA,
             _discover_schemas,
         )
@@ -342,7 +342,7 @@ class TestKnowledgeLoader:
 
     def test_to_ver53_rows_projection(self):
         """to_ver53_rows は正準列＋付帯列に射影し、欠損は既定値・余分キーは落とす（Step1）"""
-        from apps.backend.app.agents.reviewer._excel_reader import (
+        from apps.backend.app.preliminary_review.knowledge.excel_reader import (
             VER53_SCHEMA,
             to_ver53_rows,
         )
@@ -379,13 +379,13 @@ class TestKnowledgeLoader:
 
     def test_supplement_returns_empty_for_denryoku(self):
         """電力ロールは補足資料を参照できない（Phase 3）"""
-        from apps.backend.app.agents.reviewer.knowledge_loader import load_supplement
+        from apps.backend.app.preliminary_review.knowledge.knowledge_loader import load_supplement
         result = load_supplement(caller_role="電力")
         assert result == []
 
     def test_supplement_returns_empty_when_datastore_not_configured(self):
         """データストアID未設定時は空リストにフォールバックする（Phase 3）"""
-        import apps.backend.app.agents.reviewer.knowledge_loader as kl
+        import apps.backend.app.preliminary_review.knowledge.knowledge_loader as kl
         original = kl.VERTEX_SEARCH_SUPPLEMENT_DATASTORE_ID
         try:
             kl.VERTEX_SEARCH_SUPPLEMENT_DATASTORE_ID = ""
@@ -443,7 +443,7 @@ def _make_mock_firestore(mappings: list[dict] = MOCK_MAPPINGS, reviewed: bool = 
 _REVIEW_FS_PATH   = "apps.backend.app.api.routes.review.get_firestore_client"
 _UPLOAD_FS_PATH   = "apps.backend.app.api.routes.upload.get_firestore_client"
 # ADK 移行後、call_gemini は adk/agents.py 内で使われるためモック先を変更
-_GEMINI_PATH      = "apps.backend.app.agents.reviewer.adk.agents.call_gemini"
+_GEMINI_PATH      = "apps.backend.app.preliminary_review.workflow.nodes.call_gemini"
 
 
 @pytest.fixture
@@ -648,7 +648,7 @@ class TestReviewWorkbook:
              utility_name=None, sheet_names=None, ctx=None):
         """モックを組んで review_workbook を実行し (結果, run_reviewモック) を返す。"""
         import asyncio
-        from apps.backend.app.agents.reviewer import reviewer_agent as ra
+        from apps.backend.app.preliminary_review import agent as ra
 
         excel = tmp_path / "result.xlsx"
         excel.write_bytes(b"dummy")  # 存在チェック用（読み込みはモックする）
@@ -727,14 +727,14 @@ class TestReviewWorkbook:
     def test_missing_excel_raises(self, tmp_path):
         """存在しないExcelパスは FileNotFoundError"""
         import asyncio
-        from apps.backend.app.agents.reviewer import reviewer_agent as ra
+        from apps.backend.app.preliminary_review import agent as ra
         with pytest.raises(FileNotFoundError):
             asyncio.run(ra.review_workbook(excel_path=tmp_path / "nai.xlsx"))
 
     def test_no_frame_config_raises(self, tmp_path):
         """frame のシート定義が config に無ければ ValueError"""
         import asyncio
-        from apps.backend.app.agents.reviewer import reviewer_agent as ra
+        from apps.backend.app.preliminary_review import agent as ra
         excel = tmp_path / "result.xlsx"
         excel.write_bytes(b"dummy")
         with patch.object(ra, "list_frame_sheets", return_value=[]):
@@ -788,7 +788,7 @@ class TestRowIsolationInExcelReader:
 
     def test_no_message_fabrication_from_previous_row(self, tmp_path):
         """上の行に2往復あっても、1往復しかない次の行にメッセージが複製されない"""
-        from apps.backend.app.agents.reviewer._excel_reader import _read_excel_by_schema
+        from apps.backend.app.preliminary_review.knowledge.excel_reader import _read_excel_by_schema
         path = self._write_xlsx(tmp_path, [
             ["ID-001", "資料URL", "確認A", "回答A", "確認B", "回答B"],  # 2往復
             ["ID-002", "",        "確認C", "回答C", "",      ""],       # 1往復のみ
@@ -807,7 +807,7 @@ class TestRowIsolationInExcelReader:
 
     def test_no_fixed_column_bleed_from_previous_row(self, tmp_path):
         """意図的に空の固定列に、上の行の値（URL等）が染み出さない"""
-        from apps.backend.app.agents.reviewer._excel_reader import _read_excel_by_schema
+        from apps.backend.app.preliminary_review.knowledge.excel_reader import _read_excel_by_schema
         path = self._write_xlsx(tmp_path, [
             ["ID-001", "https://example.com/a.xlsx", "確認A", "回答A", "", ""],
             ["ID-002", "",                           "確認B", "回答B", "", ""],
@@ -820,7 +820,7 @@ class TestRowIsolationInExcelReader:
 
     def test_merged_cells_are_expanded(self, tmp_path):
         """結合セルは結合範囲に限定してアンカー値が展開される（fill_downの本来の意図）"""
-        from apps.backend.app.agents.reviewer._excel_reader import _read_excel_by_schema
+        from apps.backend.app.preliminary_review.knowledge.excel_reader import _read_excel_by_schema
         path = self._write_xlsx(tmp_path, [
             ["ID-001", "共通資料", "確認A", "回答A", "", ""],
             ["ID-002", "",         "確認B", "回答B", "", ""],
@@ -859,7 +859,7 @@ class TestRerank:
 
     def test_reorders_by_score_and_attaches_score(self):
         """スコア降順に並べ替わり、各レコードに _rerank_score が付く"""
-        from apps.backend.app.agents.reviewer import knowledge_loader as kl
+        from apps.backend.app.preliminary_review.knowledge import knowledge_loader as kl
         client = MagicMock()
         # 入力順 A,B,C を C,A,B に並べ替え（idは入力インデックス0,1,2）
         client.rank.return_value = self._fake_rank_response([(2, 0.91), (0, 0.55), (1, 0.10)])
@@ -874,7 +874,7 @@ class TestRerank:
 
     def test_api_error_falls_back_to_original_order(self):
         """API エラー時は元の順序をそのまま返す（検索を止めない）"""
-        from apps.backend.app.agents.reviewer import knowledge_loader as kl
+        from apps.backend.app.preliminary_review.knowledge import knowledge_loader as kl
         from google.api_core.exceptions import GoogleAPICallError
         client = MagicMock()
         client.rank.side_effect = GoogleAPICallError("boom")
@@ -888,7 +888,7 @@ class TestRerank:
 
     def test_disabled_skips_rank_call(self):
         """RERANK_ENABLED=false なら rank() を呼ばず素通し"""
-        from apps.backend.app.agents.reviewer import knowledge_loader as kl
+        from apps.backend.app.preliminary_review.knowledge import knowledge_loader as kl
         client = MagicMock()
         with patch.object(kl, "RERANK_ENABLED", False), \
              patch.object(kl, "GCP_PROJECT_ID", "proj"), \
@@ -899,7 +899,7 @@ class TestRerank:
 
     def test_missing_response_records_are_appended(self):
         """rank応答が一部欠けても取りこぼさず全件返す（安全網）"""
-        from apps.backend.app.agents.reviewer import knowledge_loader as kl
+        from apps.backend.app.preliminary_review.knowledge import knowledge_loader as kl
         client = MagicMock()
         client.rank.return_value = self._fake_rank_response([(2, 0.9)])  # C のみ返る
         client.ranking_config_path.return_value = "rc"
@@ -912,7 +912,7 @@ class TestRerank:
 
     def test_duplicate_ids_do_not_double_count_or_drop(self):
         """重複idは1回だけ採用し、欠けたレコードは末尾に温存する（二重採用・取りこぼし防止）"""
-        from apps.backend.app.agents.reviewer import knowledge_loader as kl
+        from apps.backend.app.preliminary_review.knowledge import knowledge_loader as kl
         client = MagicMock()
         # id "0" が2回・"1" が欠落。素朴な長さ一致判定だと B を落とし A を二重採用してしまう
         client.rank.return_value = self._fake_rank_response([(0, 0.9), (0, 0.8), (2, 0.5)])
@@ -926,7 +926,7 @@ class TestRerank:
 
     def test_negative_and_out_of_range_ids_are_skipped(self):
         """負数・範囲外idは無視し、欠けたレコードは末尾に温存する"""
-        from apps.backend.app.agents.reviewer import knowledge_loader as kl
+        from apps.backend.app.preliminary_review.knowledge import knowledge_loader as kl
         client = MagicMock()
         client.rank.return_value = self._fake_rank_response([(-1, 0.9), (99, 0.8), (1, 0.5)])
         client.ranking_config_path.return_value = "rc"
@@ -939,7 +939,7 @@ class TestRerank:
 
     def test_caption_used_as_content_for_supplement(self):
         """message_content が無い補足資料（Tool4）は caption を検索対象テキストに使う"""
-        from apps.backend.app.agents.reviewer import knowledge_loader as kl
+        from apps.backend.app.preliminary_review.knowledge import knowledge_loader as kl
         captured = {}
 
         def _capture_rank(request):
@@ -958,7 +958,7 @@ class TestRerank:
 
     def test_search_invokes_rerank(self):
         """_search が検索結果を _rerank に通す配線を固定（呼び出し削除の回帰検知）"""
-        from apps.backend.app.agents.reviewer import knowledge_loader as kl
+        from apps.backend.app.preliminary_review.knowledge import knowledge_loader as kl
         search_client = MagicMock()
         search_client.search.return_value = MagicMock(results=["r1", "r2"])
         sentinel = [{"_doc_id": "X"}]
@@ -977,7 +977,7 @@ class TestRelevanceGuardWithScore:
 
     def test_f2_score_above_threshold_is_relevant(self):
         """高スコアなら費目と語を共有しなくても関連＝スコア経路を証明（トークン経路では拾えない）"""
-        from apps.backend.app.agents.reviewer import _review_logic as rl
+        from apps.backend.app.preliminary_review import review_logic as rl
         # 内容は費目「施設解体一解体費」と2文字トークンを一切共有しない（＝旧トークン判定なら False）
         rec = {"message_content": "基礎撤去に伴う産業廃棄物の処理手順", "_rerank_score": 0.72}
         with patch.object(rl, "RERANK_GUARD_F2_THRESHOLD", 0.35):
@@ -985,7 +985,7 @@ class TestRelevanceGuardWithScore:
 
     def test_f2_low_score_rejected_even_if_tokens_collide(self):
         """『放射線管理費』×『放射性廃棄物』は2文字"放射"で一致するが、低スコアで不採用"""
-        from apps.backend.app.agents.reviewer import _review_logic as rl
+        from apps.backend.app.preliminary_review import review_logic as rl
         rec = {"message_content": "一次系配管解体に伴う放射性廃棄物の追加発生", "_rerank_score": 0.08}
         with patch.object(rl, "RERANK_GUARD_F2_THRESHOLD", 0.35):
             # スコアが閾値未満なので False（字面トークンなら True になってしまうケース）
@@ -993,13 +993,13 @@ class TestRelevanceGuardWithScore:
 
     def test_f2_without_score_falls_back_to_content_tokens(self):
         """スコアが無ければ従来の内容語トークン判定にフォールバック"""
-        from apps.backend.app.agents.reviewer import _review_logic as rl
+        from apps.backend.app.preliminary_review import review_logic as rl
         rec = {"message_content": "解体工法の選定基準"}  # _rerank_score なし
         assert rl._record_relevant("施設解体一解体費", rec) is True
 
     def test_f3_with_fee_type_ignores_score(self):
         """費目を持つF3はスコアに関係なく従来どおり費目語で判定"""
-        from apps.backend.app.agents.reviewer import _review_logic as rl
+        from apps.backend.app.preliminary_review import review_logic as rl
         rec = {"cost_category": "解体撤去費", "fee_type": "解体撤去費", "_rerank_score": 0.01}
         assert rl._record_relevant("施設解体一解体費", rec) is True
 
@@ -1042,14 +1042,14 @@ class TestReanchorReviewItems:
 
     def test_empty_field_misanchor_is_corrected(self):
         """空欄項目(実施費用低減策)の指摘が可視セルC6に誤爆 → 様式定義でG24に補正"""
-        from apps.backend.app.agents.reviewer._review_logic import reanchor_review_items
+        from apps.backend.app.preliminary_review.review_logic import reanchor_review_items
         items = [self._item("実施費用低減策", "C6")]
         reanchor_review_items(items, "frameB", "MRC1", self._MAPS)
         assert items[0].cell_address == "G24"
 
     def test_plan_actual_prefers_actual_for_jisseki(self):
         """実績提出なら plan_actual 項目は actual 列(K24)へ補正"""
-        from apps.backend.app.agents.reviewer._review_logic import reanchor_review_items
+        from apps.backend.app.preliminary_review.review_logic import reanchor_review_items
         maps = [{"field_name": "計画実績区分", "cell_address": "C8", "value": "実績"}]
         items = [self._item("実施費用低減策", "C6")]
         reanchor_review_items(items, "frameB", "MRC1", maps)
@@ -1057,14 +1057,14 @@ class TestReanchorReviewItems:
 
     def test_valid_cell_is_left_untouched(self):
         """既に定義セル(G24)に付いている指摘は温存（不要な補正をしない）"""
-        from apps.backend.app.agents.reviewer._review_logic import reanchor_review_items
+        from apps.backend.app.preliminary_review.review_logic import reanchor_review_items
         items = [self._item("実施費用低減策", "G24")]
         reanchor_review_items(items, "frameB", "MRC1", self._MAPS)
         assert items[0].cell_address == "G24"
 
     def test_field_in_two_sections_keeps_valid_cell(self):
         """複数セクションに定義される炉型(C7とG9)は、どちらの有効セルも補正しない"""
-        from apps.backend.app.agents.reviewer._review_logic import reanchor_review_items
+        from apps.backend.app.preliminary_review.review_logic import reanchor_review_items
         for cell in ("C7", "G9"):
             items = [self._item("炉型", cell)]
             reanchor_review_items(items, "frameB", "MRC1", self._MAPS)
@@ -1072,14 +1072,14 @@ class TestReanchorReviewItems:
 
     def test_tabular_field_is_left_untouched(self):
         """様式定義一覧に無い表フィールドは温存（元番地が正しいため触らない）"""
-        from apps.backend.app.agents.reviewer._review_logic import reanchor_review_items
+        from apps.backend.app.preliminary_review.review_logic import reanchor_review_items
         items = [self._item("解体機器表_30_計画_費用", "J30")]
         reanchor_review_items(items, "frameB", "MRC1", self._MAPS)
         assert items[0].cell_address == "J30"
 
     def test_unknown_field_is_left_untouched(self):
         """様式定義に無い field名（LLMの言い換え等）は温存"""
-        from apps.backend.app.agents.reviewer._review_logic import reanchor_review_items
+        from apps.backend.app.preliminary_review.review_logic import reanchor_review_items
         items = [self._item("費用低減の記載について", "C6")]
         reanchor_review_items(items, "frameB", "MRC1", self._MAPS)
         assert items[0].cell_address == "C6"
@@ -1112,7 +1112,7 @@ class TestHumanizeEvidenceRefs:
                           knowledge_source=source)
 
     def _run(self, items):
-        from apps.backend.app.agents.reviewer._review_logic import humanize_evidence_refs
+        from apps.backend.app.preliminary_review.review_logic import humanize_evidence_refs
         return humanize_evidence_refs(items, self._F2, self._F3_OWN, self._F3_ALL)
 
     def test_f3own_ref_replaced_with_source(self):
@@ -1155,7 +1155,7 @@ class TestHumanizeEvidenceRefs:
 
     def test_record_without_locator_kept_verbatim(self):
         """由来情報（シート・ID）を全く持たないレコードへの参照は原文温存"""
-        from apps.backend.app.agents.reviewer._review_logic import humanize_evidence_refs
+        from apps.backend.app.preliminary_review.review_logic import humanize_evidence_refs
         items = [self._item("[F3own#1] 参照")]
         humanize_evidence_refs(items, [], [{"utility_name": "関東電力"}], [])
         assert items[0].evidence == "[F3own#1] 参照"
@@ -1193,7 +1193,7 @@ class TestGenerateMissingEntryItems:
         return {"field_name": field, "cell_address": cell, "value": value, "reasoning": ""}
 
     def _run(self, mappings, fields=None, table=None):
-        from apps.backend.app.agents.reviewer._review_logic import _generate_missing_entry_items
+        from apps.backend.app.preliminary_review.review_logic import _generate_missing_entry_items
         return _generate_missing_entry_items(
             mappings, "frameB", "MRC1",
             self._REQ_FIELDS if fields is None else fields,
@@ -1292,9 +1292,9 @@ class TestMissingEntryGolden:
         import pathlib
         if not pathlib.Path(self._GOLDEN).exists():
             pytest.skip("ゴールデンExcelなし")
-        from apps.backend.app.agents.reviewer._review_logic import _generate_missing_entry_items
-        from apps.backend.app.agents.reviewer.criteria_loader import load_required_entries
-        from apps.backend.app.agents.reviewer.result_reader import reconstruct_mappings_from_excel
+        from apps.backend.app.preliminary_review.review_logic import _generate_missing_entry_items
+        from apps.backend.app.preliminary_review.criteria_loader import load_required_entries
+        from apps.backend.app.preliminary_review.knowledge.result_reader import reconstruct_mappings_from_excel
         for sheet in ("MRC1", "MRC2"):
             mappings = reconstruct_mappings_from_excel(self._GOLDEN, "frameB", sheet)
             req = load_required_entries("frameB", sheet)
@@ -1326,7 +1326,7 @@ class TestProseCitationResolution:
 
     def test_prose_citation_resolved_and_normalized(self):
         """メッセージID散文引用を逆引きし、F3根拠を維持・参照番号形式へ正規化する"""
-        from apps.backend.app.agents.reviewer._review_logic import apply_relevance_guard
+        from apps.backend.app.preliminary_review.review_logic import apply_relevance_guard
         f3_own = [self._f3("03_KT_1G_01_0003_01"), self._f3("03_KT_1G_01_0003_02")]
         it = self._item("【F3ナレッジ（自社：関東電力）｜シートKNI_1G_01｜メッセージID 03_KT_1G_01_0003_02】, "
                         "【F3ナレッジ（自社：関東電力）｜シートKNI_1G_01｜メッセージID 03_KT_1G_01_0003_01】")
@@ -1336,7 +1336,7 @@ class TestProseCitationResolution:
 
     def test_prose_citation_of_irrelevant_record_still_demoted(self):
         """散文引用でも無関係レコード（費目不一致）なら従来どおり降格（難4安全性）"""
-        from apps.backend.app.agents.reviewer._review_logic import apply_relevance_guard
+        from apps.backend.app.preliminary_review.review_logic import apply_relevance_guard
         f3_own = [self._f3("03_KT_1G_01_0009_01", fee="放射線管理費")]
         maps = [{"field_name": "対象費目1", "cell_address": "G6", "value": "処分費"}]
         it = self._item("メッセージID 03_KT_1G_01_0009_01 を参照")
@@ -1345,14 +1345,14 @@ class TestProseCitationResolution:
 
     def test_unresolvable_prose_citation_demoted(self):
         """どのレコードIDにも一致しない散文引用は従来どおり降格"""
-        from apps.backend.app.agents.reviewer._review_logic import apply_relevance_guard
+        from apps.backend.app.preliminary_review.review_logic import apply_relevance_guard
         it = self._item("過去事例（詳細不明）による")
         apply_relevance_guard([it], self._MAPS, [], [self._f3("03_KT_1G_01_0001_01")], [])
         assert it.knowledge_source == "AI知見"
 
     def test_bracket_citation_path_unchanged(self):
         """従来の [F3own#N] 形式はそのまま機能（evidenceも不変）"""
-        from apps.backend.app.agents.reviewer._review_logic import apply_relevance_guard
+        from apps.backend.app.preliminary_review.review_logic import apply_relevance_guard
         it = self._item("[F3own#1]")
         apply_relevance_guard([it], self._MAPS, [], [self._f3("03_KT_1G_01_0001_01")], [])
         assert it.knowledge_source == "F3"
@@ -1360,7 +1360,7 @@ class TestProseCitationResolution:
 
     def test_substring_id_collision_prefers_longer_id(self):
         """IDが部分文字列関係にある場合、長いIDを先に照合して誤解決しない"""
-        from apps.backend.app.agents.reviewer._review_logic import apply_relevance_guard
+        from apps.backend.app.preliminary_review.review_logic import apply_relevance_guard
         f3_own = [self._f3("03_KT_0001"), self._f3("03_KT_0001_01")]
         it = self._item("メッセージID 03_KT_0001_01 参照")
         apply_relevance_guard([it], self._MAPS, [], f3_own, [])
@@ -1368,7 +1368,7 @@ class TestProseCitationResolution:
 
     def test_mixed_prose_and_bracket_normalized(self):
         """散文とbracketが混在するevidenceも出現順で正準形式に正規化"""
-        from apps.backend.app.agents.reviewer._review_logic import apply_relevance_guard
+        from apps.backend.app.preliminary_review.review_logic import apply_relevance_guard
         f3_own = [self._f3("03_KT_1G_01_0003_01"), self._f3("03_KT_1G_01_0003_02")]
         it = self._item("【F3ナレッジ｜メッセージID 03_KT_1G_01_0003_02】 および [F3own#1] を参照")
         apply_relevance_guard([it], self._MAPS, [], f3_own, [])
@@ -1377,7 +1377,7 @@ class TestProseCitationResolution:
 
     def test_no_submission_fee_normalizes_but_never_demotes(self):
         """費目が取れないシート（MRC2等）でも正規化は行い、降格はしない（従来挙動維持）"""
-        from apps.backend.app.agents.reviewer._review_logic import apply_relevance_guard
+        from apps.backend.app.preliminary_review.review_logic import apply_relevance_guard
         maps_no_fee = [{"field_name": "費用内訳_人件費_数量", "cell_address": "E39", "value": "1"}]
         f3_own = [self._f3("03_KT_1G_01_0004_01", fee="全く別の費目")]
         it = self._item("【F3ナレッジ｜メッセージID 03_KT_1G_01_0004_01】")
@@ -1396,7 +1396,7 @@ class TestMergeRuleAndGeminiItems:
 
     def test_grounded_gemini_wins_over_rule_on_same_cell(self):
         """同一セルではF3根拠つきGemini指摘がルール指摘（必須欄空欄等）に勝つ"""
-        from apps.backend.app.agents.reviewer._review_logic import merge_rule_and_gemini_items
+        from apps.backend.app.preliminary_review.review_logic import merge_rule_and_gemini_items
         rule   = [self._item("G24", "AI知見", "記載必須欄が空欄")]
         gemini = [self._item("G24", "F3", "過去事例に基づく指摘")]
         out = merge_rule_and_gemini_items(rule, gemini)
@@ -1404,7 +1404,7 @@ class TestMergeRuleAndGeminiItems:
 
     def test_ungrounded_gemini_loses_to_rule_on_same_cell(self):
         """根拠なし（AI知見）のGemini指摘は従来どおりルール指摘を優先"""
-        from apps.backend.app.agents.reviewer._review_logic import merge_rule_and_gemini_items
+        from apps.backend.app.preliminary_review.review_logic import merge_rule_and_gemini_items
         rule   = [self._item("G24", "AI知見", "記載必須欄が空欄")]
         gemini = [self._item("G24", "AI知見", "LLMの重複指摘")]
         out = merge_rule_and_gemini_items(rule, gemini)
@@ -1412,7 +1412,7 @@ class TestMergeRuleAndGeminiItems:
 
     def test_disjoint_cells_all_kept(self):
         """セルが重ならなければ両方残る（ルール→Geminiの順）"""
-        from apps.backend.app.agents.reviewer._review_logic import merge_rule_and_gemini_items
+        from apps.backend.app.preliminary_review.review_logic import merge_rule_and_gemini_items
         rule   = [self._item("G25", "AI知見")]
         gemini = [self._item("J30", "F3"), self._item("G23", "AI知見")]
         out = merge_rule_and_gemini_items(rule, gemini)

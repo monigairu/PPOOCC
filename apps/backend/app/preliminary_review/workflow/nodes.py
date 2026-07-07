@@ -33,9 +33,9 @@ import logging
 
 from google.adk.agents import Context
 
-from apps.backend.app.agents.reviewer import knowledge_loader
-from apps.backend.app.agents.reviewer.adk import state_keys as K
-from apps.backend.app.agents.reviewer._review_logic import (
+from apps.backend.app.preliminary_review.knowledge import knowledge_loader
+from apps.backend.app.preliminary_review.workflow import state_keys as K
+from apps.backend.app.preliminary_review.review_logic import (
     detect_plan_diff,
     _compute_cell_sets,
     _generate_rule_based_items,
@@ -47,8 +47,8 @@ from apps.backend.app.agents.reviewer._review_logic import (
     humanize_evidence_refs,
     merge_rule_and_gemini_items,
 )
-from apps.backend.app.agents.reviewer.criteria_loader import build_system_instruction, load_required_entries
-from apps.backend.app.api.models import ReviewItem
+from apps.backend.app.preliminary_review.criteria_loader import build_system_instruction, load_required_entries
+from apps.backend.app.preliminary_review.models import ReviewItem
 from apps.backend.app.core.ai_client import call_gemini
 
 logger = logging.getLogger(__name__)

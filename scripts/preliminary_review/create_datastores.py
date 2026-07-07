@@ -2,7 +2,7 @@
 Vertex AI Search データストア・検索エンジン作成スクリプト（一度だけ実行）
 
 実行方法:
-    uv run python scripts/create_datastores.py
+    uv run python scripts/preliminary_review/create_datastores.py
 
 作成されるデータストア:
     nuro-f2-knowledge         ... F2ナレッジ（NuRO内有の知見・直接投入／旧経路）
@@ -24,14 +24,14 @@ Vertex AI Search データストア・検索エンジン作成スクリプト（
     VERTEX_SEARCH_F3_BQ_ENGINE_ID=nuro-f3-bq-search
 
 その後のデータ投入:
-    uv run python scripts/ingest_knowledge.py --backend bigquery
+    uv run python scripts/preliminary_review/ingest_knowledge.py --backend bigquery
 """
 import sys
 import time
 from pathlib import Path
 
 # プロジェクトルートをパスに追加
-sys.path.insert(0, str(Path(__file__).parent.parent))
+sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 from google.api_core.exceptions import AlreadyExists
 from google.cloud import discoveryengine_v1 as discoveryengine
@@ -218,7 +218,7 @@ def main() -> None:
     ]
     for env_key, resource_id in recommended:
         print(f"  {env_key}={resource_id}")
-    print("\n次のステップ: uv run python scripts/ingest_knowledge.py --backend bigquery")
+    print("\n次のステップ: uv run python scripts/preliminary_review/ingest_knowledge.py --backend bigquery")
 
 
 if __name__ == "__main__":

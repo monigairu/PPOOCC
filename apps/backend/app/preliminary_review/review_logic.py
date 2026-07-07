@@ -13,9 +13,9 @@ import json
 import logging
 import re
 
-from apps.backend.app.api.models import ReviewItem
 from apps.backend.app.core.frame_config_loader import load_frame_config
-from apps.backend.app.core.settings import RERANK_GUARD_F2_THRESHOLD
+from apps.backend.app.preliminary_review.config import RERANK_GUARD_F2_THRESHOLD
+from apps.backend.app.preliminary_review.models import ReviewItem
 
 logger = logging.getLogger(__name__)
 

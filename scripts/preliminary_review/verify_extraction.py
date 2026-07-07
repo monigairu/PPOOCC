@@ -12,9 +12,9 @@
                    取り逃し・値違い・動的表の空行打ち切りによる取り逃しを検出する。
 
 使い方:
-  uv run python scripts/verify_extraction.py                        # ①ナレッジのみ
-  uv run python scripts/verify_extraction.py --bigquery             # ①＋BigQuery突合
-  uv run python scripts/verify_extraction.py --review-excel <転記結果.xlsx> [--frame frameB]
+  uv run python scripts/preliminary_review/verify_extraction.py                        # ①ナレッジのみ
+  uv run python scripts/preliminary_review/verify_extraction.py --bigquery             # ①＋BigQuery突合
+  uv run python scripts/preliminary_review/verify_extraction.py --review-excel <転記結果.xlsx> [--frame frameB]
   （組み合わせ可。終了コード: 問題なし=0 / 問題あり=1）
 
 前提:
@@ -27,11 +27,11 @@ import argparse
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).parent.parent))
+sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 from openpyxl import load_workbook
 
-from apps.backend.app.agents.reviewer._excel_reader import (
+from apps.backend.app.preliminary_review.knowledge.excel_reader import (
     _col_letter_to_idx,
     _discover_schemas,
     _infer_direction,
@@ -211,18 +211,19 @@ def check_bigquery() -> None:
     from google.cloud import bigquery
 
     from apps.backend.app.core import settings
+    from apps.backend.app.preliminary_review import config as review_config
 
     client = bigquery.Client(project=settings.GCP_PROJECT_ID)
     for ktype, reader, table in (
-        ("f2", read_all_f2, settings.BIGQUERY_F2_TABLE_ID),
-        ("f3", read_all_f3, settings.BIGQUERY_F3_TABLE_ID),
+        ("f2", read_all_f2, review_config.BIGQUERY_F2_TABLE_ID),
+        ("f3", read_all_f3, review_config.BIGQUERY_F3_TABLE_ID),
     ):
         rows = excel_to_bq_input(reader(), ktype)
         local = {r["message_id"]: r["message_content"] for r in rows}
         if len(local) != len(rows):
             problems.append(f"[BQ:{ktype}] ローカル行に message_id 重複 {len(rows) - len(local)} 件")
 
-        fq = f"{settings.GCP_PROJECT_ID}.{settings.BIGQUERY_DATASET_ID}.{table}"
+        fq = f"{settings.GCP_PROJECT_ID}.{review_config.BIGQUERY_DATASET_ID}.{table}"
         bq_rows = {
             r["message_id"]: r["message_content"]
             for r in client.query(f"SELECT message_id, message_content FROM `{fq}`").result()
@@ -256,7 +257,7 @@ def check_review_form(excel_path: Path, frame: str) -> None:
         frame: 様式名（config/{frame}/ のシート定義を参照）。
     """
     print(f"\n{'=' * 72}\n ② レビュー様式: 生Excel vs mappings復元（{excel_path.name}）\n{'=' * 72}")
-    from apps.backend.app.agents.reviewer.result_reader import reconstruct_mappings_from_excel
+    from apps.backend.app.preliminary_review.knowledge.result_reader import reconstruct_mappings_from_excel
     from apps.backend.app.core.frame_config_loader import (
         extract_cell_definitions,
         list_frame_sheets,
