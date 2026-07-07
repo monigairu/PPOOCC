@@ -313,6 +313,10 @@ def _build_prompt(
   例：本申請の費目が「放射線管理費」なのに、検索結果が「解体撤去費／解体工事」の事例 → 不採用。
 - 同義語・表記ゆれは同種とみなす（例：解体撤去費＝解体費＝施設解体費）。号機違い・系統違いでも
   同じ費目・同種工事なら参考にしてよい（その旨を明記）。
+- **工事件名が異なっていても費目が同種なら**、過去事例で NuRO が求めた一般的な確認要求
+  （積算根拠・内訳明細・物量計算書・工程/年度配分・費用低減策の具体化 等）は本申請にも
+  当てはまる限り**根拠として引用してよい**（審査の要求事項は工事をまたいで共通のため）。
+  不採用にするのは費目・対象が明らかに別分野の場合のみ。
 - 本申請に整合する過去事例が無い場合は、**knowledge_source=F2/F3 の指摘を作らない**。
   無理に根拠化せず、AI知見（プレースホルダー・曖昧表現など客観的に確認できるもの）に限るか、指摘なしとする。
 
@@ -399,6 +403,12 @@ def _build_prompt(
   ],
   "summary": "全体的なレビュー所見（2〜3文）"
 }}
+
+evidence の記載形式（重要）：
+  F2/F3 を根拠にする指摘は従来どおり積極的に出すこと。その際、引用は各レコード付属の
+  `_ref` の参照番号を**そのまま**記載する（引用をためらう理由にはしないこと）。
+  正: "[F3own#3], [F3own#4]"
+  誤: "【F3ナレッジ（自社）｜シートKNI_1G_01｜メッセージID 03_..._02】"（IDやシート名へ展開しない）
 
 severity の使い分け：
   "要確認"      → NuROの判断が必要、またはナレッジ参照なしの指摘
@@ -508,35 +518,59 @@ def apply_relevance_guard(
     f3_own: list[dict],
     f3_all: list[dict],
 ) -> list[ReviewItem]:
-    """誤grounding防止（本番堅牢化・難易度4対策）。
+    """誤grounding防止（本番堅牢化・難易度4対策）＋引用形式ゆれの決定論解決。
 
     検索は費目が違っても"近い"docを返すため、LLMが無関係な過去事例を根拠化することがある。
-    引用した [F2#N]/[F3own#N]/[F3all#N] の費目が本申請の費目と語を共有しない場合、
-    その grounding は不当とみなし AI知見へ降格する（指摘自体は残し、誤った根拠ラベルだけ外す）。
-    プロンプトの意味判断を補う確定的な安全網。特定費目をハードコードしない。
+    引用した [F2#N]/[F3own#N]/[F3all#N] が本申請に整合しない場合、その grounding は不当と
+    みなし AI知見へ降格する（指摘自体は残し、誤った根拠ラベルだけ外す）。
+
+    引用形式のゆれ対策（Gemini 3.5系対応）：モデルが参照番号でなく散文
+    （例「…メッセージID 03_KT_1G_01_0003_02」）で引用した場合も、evidence 内の
+    レコードID（_doc_id / message_id）を逆引きして参照を復元し、表示は正準の
+    参照番号形式へ正規化する。復元できない引用は従来どおり降格（難4の安全性は不変）。
+    プロンプトの意味判断を補う確定的な安全網。特定費目・IDをハードコードしない。
+
+    Args:
+        items: Gemini が生成したレビュー指摘のリスト。
+        mappings: 転記結果（本申請の費目の取得に使う）。
+        f2_knowledge: Tool1 検索結果（F2ナレッジ）。
+        f3_own: Tool2a 検索結果（F3自社）。
+        f3_all: Tool2b 検索結果（F3他社）。
+
+    Returns:
+        根拠の妥当性を検証・正規化した items（同一リストを in-place 更新して返す）。
     """
     submission_fee = next(
         (str(m.get("value", "")).strip() for m in mappings
          if m.get("field_name") in ("対象費目1", "対象費目2") and str(m.get("value", "")).strip()),
         "",
     )
-    if not submission_fee:
-        return items
 
     # 各ナレッジ参照が本申請に関連するかを事前計算する（種別ごとに基準が異なる）。
     #   F3（費目あり）        : 申請費目 ⇔ 過去事例費目 の語の重なり
     #   F2（費目なし=NuRO内知見）: 申請費目 ⇔ 内容語（業務カテゴリ・事象概要・内容）の重なり
+    # ※申請費目が取れないシート（MRC2等）は妥当性判定（降格）を行わないが、
+    #   引用の解決・正規化（下）は表示一貫性のため常に行う。
     ref_relevant: dict[str, bool] = {}
+    # 散文引用の逆引き表：レコードID（_doc_id / message_id）→ 参照キー（F3own#N 等）。
+    # モデルが [F3own#N] 形式を守らず「…メッセージID 03_KT_…」等へ展開しても、
+    # ID の一致で決定論的に引用を復元できる（Gemini 3.5系で観測された文体ゆれ対策）。
+    id_to_ref: dict[str, str] = {}
     for prefix, recs in (("F2", f2_knowledge), ("F3own", f3_own), ("F3all", f3_all)):
         for i, r in enumerate(recs, 1):
-            ref_relevant[f"{prefix}#{i}"] = _record_relevant(submission_fee, r)
+            if submission_fee:
+                ref_relevant[f"{prefix}#{i}"] = _record_relevant(submission_fee, r)
+            for key in ("_doc_id", "message_id"):
+                rid = str(r.get(key, "") or "").strip()
+                if rid:
+                    id_to_ref.setdefault(rid, f"{prefix}#{i}")
 
     # F2 が1件も関連判定されなかった場合の観測ログ（silently な回帰の早期検知）。
     # F2 grounding は Reranking スコア閾値で判定するため、モデル更新やコーパス変化で
     # スコア分布がずれると全 F2 が閾値未満に落ち、F2根拠が無音で消える（#17 と同型の回帰）。
     f2_total = len(f2_knowledge)
     f2_relevant = sum(1 for k, v in ref_relevant.items() if k.startswith("F2#") and v)
-    if f2_total and not f2_relevant:
+    if submission_fee and f2_total and not f2_relevant:
         logger.warning(
             "関連性ガード: F2ナレッジ %d 件すべてが関連なし判定（費目=%r）。"
             "Reranking のモデル/閾値ずれで F2 grounding が無音で消えていないか要確認",
@@ -547,12 +581,44 @@ def apply_relevance_guard(
         src = it.knowledge_source or ""
         if "F3" not in src and "F2" not in src:
             continue
-        refs = re.findall(r"(F2|F3own|F3all)#(\d+)", it.evidence or "")
+        evidence = it.evidence or ""
+
+        # ── 引用の解決（bracket形式＋散文の両対応・出現順を保持）──────────
+        # bracket形式（[F3own#N]）の出現位置つき抽出
+        found: list[tuple[int, str]] = []  # (出現位置, 参照キー)
+        for m in re.finditer(r"(F2|F3own|F3all)#(\d+)", evidence):
+            ref = f"{m.group(1)}#{m.group(2)}"
+            if ref not in (r for _, r in found):
+                found.append((m.start(), ref))
+        # 散文引用：evidence に含まれるレコードIDを逆引きする。長いIDから照合し、
+        # 消費済み箇所は同長マスクで潰す＝部分文字列の誤解決（親ID⊂メッセージID）を
+        # 防ぎつつ、後続IDの出現位置を保存する
+        work = evidence
+        for rid in sorted(id_to_ref, key=len, reverse=True):
+            pos = work.find(rid)
+            if pos < 0:
+                continue
+            ref = id_to_ref[rid]
+            if ref not in (r for _, r in found):
+                found.append((pos, ref))
+            work = work.replace(rid, "\x00" * len(rid))
+
+        refs = [r for _, r in sorted(found)]  # 引用の出現順を維持
+        # 表示は正準の参照番号形式へ正規化（2.5系と同じ見た目・UIの一貫性）
+        if refs:
+            canonical = ", ".join(f"[{r}]" for r in refs)
+            if it.evidence != canonical:
+                logger.info("関連性ガード: 引用を参照番号へ正規化（%s ← %.60s）", canonical, evidence)
+                it.evidence = canonical
+
+        # ── 妥当性判定（降格）：申請費目が取れる場合のみ ─────────────────
+        if not submission_fee:
+            continue
         # 引用が本申請に整合しない（または引用が辿れない）なら根拠を外す
-        if not any(ref_relevant.get(f"{p}#{n}", False) for p, n in refs):
+        if not any(ref_relevant.get(r, False) for r in refs):
             logger.info(
                 "関連性ガード: 指摘の根拠を不採用に降格（src=%s evidence_refs=%s）",
-                src, [f"{p}#{n}" for p, n in refs],
+                src, refs,
             )
             it.knowledge_source = "AI知見"
             it.severity = "要確認"
@@ -898,6 +964,38 @@ def _generate_missing_entry_items(
                     knowledge_source="AI知見",
                 ))
     return items
+
+
+def merge_rule_and_gemini_items(
+    rule_items: list[ReviewItem],
+    gemini_items: list[ReviewItem],
+) -> list[ReviewItem]:
+    """ルールベース指摘と Gemini 指摘を「1セル1指摘」でマージする。
+
+    原則はルール指摘（決定論）が優先だが、**F2/F3 根拠つきの Gemini 指摘がある
+    セルは Gemini 側を採用**する。ルール指摘（例「記載必須欄が空欄」）は LLM が
+    見落とした場合の決定論的な保険であり、同じセルに過去事例を根拠にした指摘が
+    既にあるなら、そちらの方が情報量で勝るため（本関数は apply_relevance_guard の
+    後に呼ばれる前提＝F2/F3 ラベルは関連性検証済み）。
+
+    Args:
+        rule_items: rule_check_node 由来の決定論指摘（プレースホルダー・必須欄空欄等）。
+        gemini_items: ガード・番地補正・出典可読化を通過した Gemini 指摘。
+
+    Returns:
+        マージ済みの指摘リスト（ルール指摘 → Gemini 指摘の順。item_id は未採番）。
+    """
+    grounded_cells = {
+        i.cell_address for i in gemini_items
+        if "F2" in (i.knowledge_source or "") or "F3" in (i.knowledge_source or "")
+    }
+    rule_cells = {r.cell_address for r in rule_items}
+    kept_rules = [r for r in rule_items if r.cell_address not in grounded_cells]
+    kept_gemini = [
+        i for i in gemini_items
+        if i.cell_address not in rule_cells or i.cell_address in grounded_cells
+    ]
+    return kept_rules + kept_gemini
 
 
 def _parse_review_response(raw: str) -> list[ReviewItem]:

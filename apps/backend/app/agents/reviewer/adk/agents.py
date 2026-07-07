@@ -45,6 +45,7 @@ from apps.backend.app.agents.reviewer._review_logic import (
     apply_relevance_guard,
     reanchor_review_items,
     humanize_evidence_refs,
+    merge_rule_and_gemini_items,
 )
 from apps.backend.app.agents.reviewer.criteria_loader import build_system_instruction, load_required_entries
 from apps.backend.app.api.models import ReviewItem
@@ -283,7 +284,6 @@ async def synthesis_node(ctx: Context) -> None:
     supplement_info:   list[dict]      = ctx.state.get(K.SUPPLEMENT_INFO, [])
     plan_diffs:        list[dict]      = ctx.state.get(K.PLAN_DIFFS, [])
     rule_items_dicts:  list[dict]      = ctx.state.get(K.RULE_ITEMS, [])
-    rule_cells:        set[str]        = set(ctx.state.get(K.RULE_CELLS, []))
     empty_cells:       set[str]        = set(ctx.state.get(K.EMPTY_CELLS, []))
     placeholder_cells: dict[str, str]  = ctx.state.get(K.PLACEHOLDER_CELLS, {})
 
@@ -328,10 +328,9 @@ async def synthesis_node(ctx: Context) -> None:
     #   字面で判定するため、必ず apply_relevance_guard より後に置く）
     gemini_items = humanize_evidence_refs(gemini_items, f2_knowledge, f3_own, f3_all)
 
-    # ── ルール検出済みセルを除外してマージ ─────────────────────────────────
-    filtered_gemini = [i for i in gemini_items if i.cell_address not in rule_cells]
-    rule_items_obj  = [ReviewItem(**d) for d in rule_items_dicts]
-    all_items       = rule_items_obj + filtered_gemini
+    # ── ルール指摘とマージ（1セル1指摘。F2/F3根拠つきGemini指摘はルールより優先）──
+    rule_items_obj = [ReviewItem(**d) for d in rule_items_dicts]
+    all_items      = merge_rule_and_gemini_items(rule_items_obj, gemini_items)
 
     for idx, item in enumerate(all_items, 1):
         item.item_id = f"review_{idx:03d}"
