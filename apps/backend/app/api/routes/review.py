@@ -25,8 +25,8 @@ from pathlib import Path
 from fastapi import APIRouter, File, Form, HTTPException, Query, UploadFile
 from google.cloud import firestore
 
-from apps.backend.app.agents.reviewer import reviewer_agent
-from apps.backend.app.agents.reviewer.result_reader import reconstruct_mappings_from_excel
+from apps.backend.app.preliminary_review import agent as reviewer_agent
+from apps.backend.app.preliminary_review.knowledge.result_reader import reconstruct_mappings_from_excel
 from apps.backend.app.api.models import (
     CellMapping,
     FeedbackRequest,

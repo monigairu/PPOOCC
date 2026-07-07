@@ -14,8 +14,8 @@ PoC検証マトリクス（難易度1〜4）を回せるよう、以下を意図
 
 炉型は固定列 Z（QA列N〜Yと非干渉）に書き込む（スキーマ f3_*_schema.yaml の reactor_type col:Z）。
 
-実行：uv run python scripts/generate_kanto_f3.py
-投入：uv run python scripts/ingest_knowledge.py --target f3
+実行：uv run python scripts/preliminary_review/generate_kanto_f3.py
+投入：uv run python scripts/preliminary_review/ingest_knowledge.py --target f3
 """
 from __future__ import annotations
 

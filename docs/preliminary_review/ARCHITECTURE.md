@@ -1,6 +1,7 @@
 # 事前レビュー（RAG）アーキテクチャ
 
-> **最終更新：2026-07-03**（`docs/architecture.md` からファイル分割。BigQuery平坦化・Excelアップロード入口・炉型導出・公式ver5.3準拠message_idを反映）
+> **最終更新：2026-07-07**（フォルダ切り分けリファクタを反映：`agents/reviewer/` → `preliminary_review/`、レビュー用 scripts を `scripts/preliminary_review/` へ集約。構成と関連ファイルの全体マップは B-0-1 参照）
+> 前回更新：2026-07-03（`docs/architecture.md` からファイル分割。BigQuery平坦化・Excelアップロード入口・炉型導出・公式ver5.3準拠message_idを反映）
 
 本書は事前レビュー系（RAG）の「**コードがどう動いているか**」の地図。様式自動作成（転記系）とは**別システム**のため、アーキテクチャ図をファイル分割した（転記系は [`docs/architecture.md`](../architecture.md)）。
 
@@ -21,7 +22,7 @@
 
 | 流れ | いつ動く | 何をする | 入口 |
 |---|---|---|---|
-| **① ナレッジ供給（オフライン）** | ナレッジExcel更新時に手動実行 | Excel正本 → 平坦化 → BigQuery → Agent Search索引 | `uv run python scripts/ingest_knowledge.py --backend bigquery` |
+| **① ナレッジ供給（オフライン）** | ナレッジExcel更新時に手動実行 | Excel正本 → 平坦化 → BigQuery → Agent Search索引 | `uv run python scripts/preliminary_review/ingest_knowledge.py --backend bigquery` |
 | **② レビュー実行（オンライン）** | NuROがレビューを開始したとき | 検索 → ルール検出 → Gemini指摘生成 → Firestore保存 | `POST /api/review` |
 
 初見の方への読み方：**B-1（データの置き場）→ B-2（①の流れ）→ B-3〜B-6（②の流れを入口から出口まで）** の順に読むと、関数名が全部つながります。
@@ -42,6 +43,84 @@
 | ② | ナレッジ検索 | `load_f2()` / `load_f3()` | フィルタ構築 → ハイブリッド検索 → レコード変換 → 炉型後段フィルタ | B-5 |
 | ② | ルール指摘 | `rule_check_node()` | 計画実績差分 → 空セル/プレースホルダー分別 → 即時指摘化 | B-6 |
 | ② | Gemini指摘生成 | `synthesis_node()` | プロンプト構築 → Gemini → パース → 関連性ガード | B-6 |
+
+## B-0-1. フォルダ構成と関連ファイルの全体マップ（2026-07-07 リファクタ後）
+
+### コード本体：`apps/backend/app/preliminary_review/`
+
+事前レビューのコードは転記系から独立した1パッケージ（約3,000行）に集約されている。
+root のファイル名がそのまま役割を表し、実行フロー（ADK）とナレッジアクセスだけサブフォルダに分ける。
+
+```
+apps/backend/app/preliminary_review/
+├── agent.py            # 入口：run_review()／review_workbook()（外部I/Fは不変）
+├── config.py           # レビュー固有設定（VERTEX_SEARCH_*／RERANK_*／BIGQUERY_*）
+├── models.py           # ReviewItem（指摘1件の型。api/models.py から re-export される）
+├── review_logic.py     # ルールチェック・検索クエリ構築・関連性ガード（純ロジックの中核）
+├── criteria_loader.py  # レビュー観点YAML → Gemini system instruction
+├── workflow/           # レビューの実行フロー（ADK Workflow）
+│   ├── nodes.py        # Tool1〜5＋synthesis のノード定義
+│   ├── runner.py       # Workflow 組み立て・実行
+│   └── state_keys.py   # ノード間で受け渡す state キー定数
+└── knowledge/          # F2/F3ナレッジへのアクセス
+    ├── knowledge_loader.py  # RAG検索（Vertex AI Search。I/F不変）
+    ├── excel_reader.py      # ナレッジExcel読み込み（投入・検証用）
+    └── result_reader.py     # 転記結果Excelの復元・クエリ文脈導出
+```
+
+### 運用スクリプト：`scripts/preliminary_review/`
+
+レビュー専用の9本を集約（`scripts/` 直下に残るのは転記側のみ）。
+
+| スクリプト | 役割 |
+|---|---|
+| `ingest_knowledge.py` | ナレッジ投入（Excel→BigQuery→Agent Search索引） |
+| `create_datastores.py` | データストア新規作成（初回のみ） |
+| `verify_rag.py` | GCP疎通・RAG検索検証（`--smoke-only`） |
+| `verify_extraction.py` | Excel抽出の正当性検証（生Excelと全件突合） |
+| `eval_review.py` | PoC検証マトリクス評価（難易度1〜4×2軸） |
+| `review_annotation.py` | NuRO向けアノテーション（○×）一覧の出力 |
+| `generate_dummy_knowledge.py`／`generate_kanto_f3.py`／`generate_supplement_captions.py` | 検証用ダミーデータ生成 |
+
+### A. レビュー専用（意味的には事前レビューの資産）
+
+| 場所 | 中身 | 使う側 |
+|---|---|---|
+| `data/review_criteria/*.yaml` | レビュー観点 | `criteria_loader.py` が直接読む |
+| `data/knowledge/`（Excel＋`schema/`） | F2/F3ナレッジの正本 | `knowledge/excel_reader.py`（投入・検証時のみ。実行時は Vertex AI Search 経由） |
+| `data/review_eval/` | ゴールド指摘・アノテーション | 評価 scripts |
+| `data/golden/frameB/*.xlsx` | 検証用の転記結果サンプル | 評価・`review_workbook()` の動作確認 |
+| `scripts/preliminary_review/`（9本） | ナレッジ投入・検証・評価（上表） | レビュー運用 |
+| `api/routes/review.py` | `/api/review` エンドポイント | FastAPI 入口 |
+| `tests/test_review_e2e.py` | 回帰テスト104件 | — |
+| `.env` のレビュー専用キー | `VERTEX_SEARCH_*`／`RERANK_*`／`BIGQUERY_*` | `preliminary_review/config.py` が読む |
+
+### B. 転記と共有（共通基盤・分離すべきでないもの）
+
+| 場所 | 役割 | 共有が正しい理由 |
+|---|---|---|
+| `config/{frame}/{sheet}.yaml` | 様式定義（セル↔フィールド） | 転記が書き込む構造とレビューが照合する構造は同一物である必要がある（CLAUDE.md の「チェックの拠り所」そのもの） |
+| `core/settings.py`・`ai_client.py`・`frame_config_loader.py`・`firestore_client.py` | GCP接続・Gemini呼び出し・様式定義ロード・DB | 両機能が同じ実装を使うべき基盤 |
+| `api/`（main.py・models.py） | FastAPI 本体 | 1つのアプリに両機能のルートが載る |
+| `.env` 共有キー＋サービスアカウント鍵 | `GOOGLE_CLOUD_PROJECT` 等 | — |
+
+### 2026-07-07 リファクタでの変更点（旧→新対応）
+
+コードの中身（関数のI/F・挙動）は一切変えず、置き場所と名前のみ変更した。回帰テスト217件・レビューE2E 104件・GCPスモーク・ゴールデンファイルでの実レビュー実行で無変化を確認済み。
+
+| 旧 | 新 |
+|---|---|
+| `app/agents/reviewer/reviewer_agent.py` | `app/preliminary_review/agent.py` |
+| `app/agents/reviewer/adk/agents.py` | `app/preliminary_review/workflow/nodes.py` |
+| `app/agents/reviewer/adk/runner.py`・`state_keys.py` | `app/preliminary_review/workflow/`（同名） |
+| `app/agents/reviewer/_review_logic.py` | `app/preliminary_review/review_logic.py` |
+| `app/agents/reviewer/knowledge_loader.py` | `app/preliminary_review/knowledge/knowledge_loader.py` |
+| `app/agents/reviewer/_excel_reader.py` | `app/preliminary_review/knowledge/excel_reader.py` |
+| `app/agents/reviewer/result_reader.py` | `app/preliminary_review/knowledge/result_reader.py` |
+| `app/agents/reviewer/criteria_loader.py` | `app/preliminary_review/criteria_loader.py` |
+| `api/models.py` 内の `ReviewItem` 定義 | `app/preliminary_review/models.py` に移設（`api/models.py` は re-export で互換維持） |
+| `core/settings.py` 内のレビュー固有設定 | `app/preliminary_review/config.py` に分離（共有設定は `core/settings.py` のまま） |
+| `scripts/` 直下のレビュー用9本 | `scripts/preliminary_review/` へ移動 |
 
 ## B-1. 鳥瞰図：4つのデータ置き場と役割
 
@@ -78,7 +157,7 @@ flowchart LR
 ```mermaid
 flowchart TD
     XLS["data/knowledge/*.xlsx（正本）<br/>＋ schema/*.yaml"] --> READ
-    subgraph ING["_ingest_bigquery(knowledge_type)　—　①全体の実行入口（scripts/ingest_knowledge.py）"]
+    subgraph ING["_ingest_bigquery(knowledge_type)　—　①全体の実行入口（scripts/preliminary_review/ingest_knowledge.py）"]
         READ["read_all_f2() / read_all_f3()<br/>Excel正本 → 平坦レコード<br/>（1メッセージ=1行・炉型導出込み）"]
         OYA["excel_to_bq_input(records, knowledge_type)<br/>Excel読み取り結果 → BigQueryインプットに加工<br/>（射影・フィールド補正・message_id検証）"]
         LOAD["BigQuery ロード<br/>WRITE_TRUNCATE＝全件置換"]
@@ -93,9 +172,9 @@ flowchart TD
 
 | 親玉関数（場所） | 役割 | 入力 | 出力 |
 |---|---|---|---|
-| `read_all_f2()` / `read_all_f3()`（`agents/reviewer/_excel_reader.py`） | schema YAML を全発見し、対応するナレッジExcelを平坦レコード化する入口（炉型導出まで含む） | `data/knowledge/*.xlsx` ＋ `schema/f2_*／f3_*_schema.yaml` | `list[dict]`（1メッセージ=1行） |
+| `read_all_f2()` / `read_all_f3()`（`preliminary_review/knowledge/excel_reader.py`） | schema YAML を全発見し、対応するナレッジExcelを平坦レコード化する入口（炉型導出まで含む） | `data/knowledge/*.xlsx` ＋ `schema/f2_*／f3_*_schema.yaml` | `list[dict]`（1メッセージ=1行） |
 | `excel_to_bq_input(records, knowledge_type)`（同上） | **Excel読み取り結果を受け取って BigQuery のインプットに加工する**。射影・フィールド補正・message_id検証を束ねる。検証NGは `ValueError` | 平坦レコード ＋ `"f2"/"f3"` | BigQueryロード可能な行の `list[dict]` |
-| `_ingest_bigquery(knowledge_type)`（`scripts/ingest_knowledge.py`） | ①全体の実行入口。上記2つを呼び、BigQueryへ**全件置換**（WRITE_TRUNCATE）でロード→索引投入まで実行 | `"f2"/"f3"` | `f2/f3_flat_ver53` テーブル更新＋索引 |
+| `_ingest_bigquery(knowledge_type)`（`scripts/preliminary_review/ingest_knowledge.py`） | ①全体の実行入口。上記2つを呼び、BigQueryへ**全件置換**（WRITE_TRUNCATE）でロード→索引投入まで実行 | `"f2"/"f3"` | `f2/f3_flat_ver53` テーブル更新＋索引 |
 | `_index_bigquery_to_agent_search()`（同上） | BigQueryテーブルを構造化データストアへ**FULL同期**（テーブルと索引が完全一致） | datastore_id, table_id | Agent Search ドキュメント（`id_field=message_id`） |
 | `create_datastores.py`（scripts/） | データストアの新規作成（初回のみ。`structured: True`＝BigQuery索引用） | — | `nuro-f2/f3-bq-knowledge` |
 
@@ -118,7 +197,7 @@ flowchart TD
 
 | 関数（場所） | 役割 | 入力 | 出力 |
 |---|---|---|---|
-| `_read_excel_by_schema()`（`agents/reviewer/_excel_reader.py`） | 1シート分の読み込み中核。固定列→base辞書、QA繰り返し列→メッセージ展開、`sheet_name` 付与 | schema dict ＋ Excelパス | `(records, utility_name)` |
+| `_read_excel_by_schema()`（`preliminary_review/knowledge/excel_reader.py`） | 1シート分の読み込み中核。固定列→base辞書、QA繰り返し列→メッセージ展開、`sheet_name` 付与 | schema dict ＋ Excelパス | `(records, utility_name)` |
 | `derive_reactor_type()`（同上） | **炉型は様式の列ではなく「該当発電所」から導出**（発電所≒炉型一意のドメイン知識。号機で異なる例外は「発電所/号機」キーで上書き） | `("網走原子力発電所", "1号機")` | `"PWR"`（`data/knowledge/schema/plant_reactor_map.yaml`） |
 | `to_ver53_rows(records, knowledge_type)`（同上） | 正準列契約 `VER53_SCHEMA` への射影。余分キーは落とし、欠損は既定値で埋める＝**BigQueryが常に同一スキーマの行を受け取る保証** | 平坦レコード ＋ `"f2"/"f3"` | BigQuery行の `list[dict]` |
 | `_apply_bq_field_defaults(knowledge_type, rows)`（同上） | knowledge_type ごとの検索用フィールド補正（F3=会社名正規化・F2=`caller_role_required=NuRO`）。検索側と同じ正規化で表記ゆれを吸収 | `"f2"/"f3"` ＋ 行リスト | 行リストを直接補正 |
@@ -134,7 +213,7 @@ flowchart TD
 
 ## B-3. ② レビュー実行の入口（3つの入口 → 1つに合流）
 
-レビューの入口は3つあるが、**すべて `reviewer_agent.run_review()` に合流する**。検証ハーネスも本番と同じコードパスを通るため、検証で通った経路がそのまま本番の経路になる。
+レビューの入口は3つあるが、**すべて `agent.run_review()` に合流する**。検証ハーネスも本番と同じコードパスを通るため、検証で通った経路がそのまま本番の経路になる。
 
 ```mermaid
 flowchart TD
@@ -147,10 +226,10 @@ flowchart TD
         REC --> SAVE["セッション保存 → 入口1と同じ流れへ"]
     end
     subgraph E3["入口3: 任意の転記結果Excel（ワークブック一括）"]
-        VR["scripts/verify_rag.py --excel 転記結果.xlsx<br/>（薄ラッパ・表示とレポートのみ）"] --> WBK["review_workbook()<br/>（シート列挙 → 復元 → シート毎にレビュー）"]
+        VR["scripts/preliminary_review/verify_rag.py --excel 転記結果.xlsx<br/>（薄ラッパ・表示とレポートのみ）"] --> WBK["review_workbook()<br/>（シート列挙 → 復元 → シート毎にレビュー）"]
         WBK --> REC2["同じ reconstruct_mappings_from_excel()<br/>＋ derive_query_context()"]
     end
-    FS1 --> AGENT["reviewer_agent.run_review()"]
+    FS1 --> AGENT["agent.run_review()"]
     SAVE -.-> FS1
     REC2 --> AGENT
     AGENT --> QB["build_search_query()<br/>検索クエリ＝申請自身の『費目＋工事件名』<br/>（観点語はハードコードしない）"]
@@ -161,15 +240,15 @@ flowchart TD
 |---|---|---|---|
 | `run_review()` route（`api/routes/review.py`・`POST /api/review`） | セッションの mappings を読み、AIレビューを実行して結果を保存（転記結果自体は変更しない）。`reviewed=True` に更新 | `ReviewRequest(session_id, utility_name, frame_name, sheet_name)` | `ReviewResponse(review_id, review_items, summary, mappings, retrieval_trace)` |
 | `upload_form_for_review()`（同上・`POST /api/review/upload`） | 転記を経ずに完成様式Excelを直接レビューにかける入口。復元→Firestoreセッション作成 | `file=転記結果.xlsx, frame_name, sheet_name` | `UploadResponse(session_id, mappings)` |
-| `reconstruct_mappings_from_excel()`（`agents/reviewer/result_reader.py`） | 様式定義（`config/{frame}/{sheet}.yaml`）に基づきセル値→mappings を復元。label_value／plan_actual／tabular セクション対応。**特定ファイル・特定費目に依存しない** | `excel_path, frame, sheet` | `list[mapping dict]` |
+| `reconstruct_mappings_from_excel()`（`preliminary_review/knowledge/result_reader.py`） | 様式定義（`config/{frame}/{sheet}.yaml`）に基づきセル値→mappings を復元。label_value／plan_actual／tabular セクション対応。**特定ファイル・特定費目に依存しない** | `excel_path, frame, sheet` | `list[mapping dict]` |
 | `derive_query_context()`（同上） | Excelから検索文脈（費目・炉型・電力会社）を導出。クロスシート対応（MRC2レビューでも文脈はMRC1から取る） | `excel_path, frame, sheet, context_sheet` | `{fee_type, reactor_type, utility_name}` |
-| `review_workbook()`（`agents/reviewer/reviewer_agent.py`） | **ワークブック統括（Step2）**。config のシート一覧を列挙し、シート毎に「復元→`run_review()`」を実行。復元不能シートはスキップ・Firestore保存はしない（保存はAPI層の責務） | `excel_path, frame_name, [sheet_names], [utility_name], [context_sheet]` | `{utility_name, query_context, sheets{review_items, retrieval_trace, mappings}, skipped_sheets}` |
-| `reviewer_agent.run_review()`（`agents/reviewer/reviewer_agent.py`） | レビュー本体の外部I/F（**Phase 1から不変**）。mappingsから炉型・費目を自動補完し、Workflowを起動 | `session_id, utility_name, mappings, frame_name, sheet_name, [reactor_type], [fee_type]` | `(list[ReviewItem], retrieval_trace)` |
-| `build_search_query()`（`agents/reviewer/_review_logic.py`） | mappingsから「対象費目1＋工事件名」を取り出して検索クエリを合成（取れなければfallback） | `mappings, fallback` | `"施設解体一解体費 ○○建屋解体工事"` |
+| `review_workbook()`（`preliminary_review/agent.py`） | **ワークブック統括（Step2）**。config のシート一覧を列挙し、シート毎に「復元→`run_review()`」を実行。復元不能シートはスキップ・Firestore保存はしない（保存はAPI層の責務） | `excel_path, frame_name, [sheet_names], [utility_name], [context_sheet]` | `{utility_name, query_context, sheets{review_items, retrieval_trace, mappings}, skipped_sheets}` |
+| `agent.run_review()`（`preliminary_review/agent.py`） | レビュー本体の外部I/F（**Phase 1から不変**）。mappingsから炉型・費目を自動補完し、Workflowを起動 | `session_id, utility_name, mappings, frame_name, sheet_name, [reactor_type], [fee_type]` | `(list[ReviewItem], retrieval_trace)` |
+| `build_search_query()`（`preliminary_review/review_logic.py`） | mappingsから「対象費目1＋工事件名」を取り出して検索クエリを合成（取れなければfallback） | `mappings, fallback` | `"施設解体一解体費 ○○建屋解体工事"` |
 
 ## B-4. レビュー本体：ADK Workflow（並列検索 → ルール検出 → 生成）
 
-`run_workflow()`（`adk/runner.py`）が毎リクエスト新規セッションで実行する。**5つの検索ノードが並列**に走り（同期loaderを `run_in_executor` でスレッド並列化）、全完了後にルール検出→Gemini生成が**直列**に続く。各ノードは `ctx.state` を読み書きするだけで、エラー時は空リストにフォールバックしてレビュー全体を止めない。
+`run_workflow()`（`workflow/runner.py`）が毎リクエスト新規セッションで実行する。**5つの検索ノードが並列**に走り（同期loaderを `run_in_executor` でスレッド並列化）、全完了後にルール検出→Gemini生成が**直列**に続く。各ノードは `ctx.state` を読み書きするだけで、エラー時は空リストにフォールバックしてレビュー全体を止めない。
 
 ```mermaid
 flowchart TD
@@ -188,7 +267,7 @@ flowchart TD
     SY --> OUT["review_items ＋ retrieval_trace"]
 ```
 
-**state の受け渡し**（`adk/agents.py`。キー定義は `adk/state_keys.py`）：
+**state の受け渡し**（`workflow/nodes.py`。キー定義は `workflow/state_keys.py`）：
 
 | ノード | 読む state | 書く state | 呼ぶ関数 |
 |---|---|---|---|
@@ -224,7 +303,7 @@ flowchart LR
 | `_to_record()` | 検索結果1件→フラット辞書。ver5.3列名（`cost_category`）と旧structキー（`fee_type`）の**互換エイリアス**を付与（下流の関連性ガードが `fee_type` を読むため） | `SearchResult` | `dict`（`_doc_id` 付き） |
 | `_serving_config()` | データストア→検索エンジンのパス解決（エンジン未設定ならデータストア直接） | `datastore_id` | serving config パス |
 
-## B-6. 指摘の生成（rule_check_node → synthesis_node・_review_logic.py）
+## B-6. 指摘の生成（rule_check_node → synthesis_node・review_logic.py）
 
 生成は**2段構え**。機械的に確定できる指摘はルールで先に作り（Geminiを待たない・ぶれない）、文脈判断が要るものだけGeminiに渡す。Geminiの出力には**関連性ガード**をかけ、無関係な過去事例を根拠にした指摘（誤grounding）を防ぐ。
 
@@ -282,10 +361,10 @@ review_stats/{YYYY-MM-DD}    ← 承諾/棄却の日次集計
 検証ハーネスは B-3 の復元関数と B-4〜B-6 の本体をそのまま呼ぶため、**検証で通った経路＝本番の経路**。生成レポートは `data/verification/` 等に出力される（gitignore・コミットしない）。
 
 ```bash
-uv run python scripts/verify_rag.py --smoke-only                          # GCP/Agent Search 疎通
-uv run python scripts/verify_rag.py --excel <転記結果.xlsx> [--retrieval-only]  # 検索の中身／フルレビュー
-uv run python scripts/eval_review.py                                       # PoC検証マトリクス（難易度1〜4×2軸）
-uv run python scripts/review_annotation.py --excel <結果.xlsx> --sheets MRC1,MRC2  # NuROアノテーション用
+uv run python scripts/preliminary_review/verify_rag.py --smoke-only                          # GCP/Agent Search 疎通
+uv run python scripts/preliminary_review/verify_rag.py --excel <転記結果.xlsx> [--retrieval-only]  # 検索の中身／フルレビュー
+uv run python scripts/preliminary_review/eval_review.py                                       # PoC検証マトリクス（難易度1〜4×2軸）
+uv run python scripts/preliminary_review/review_annotation.py --excel <結果.xlsx> --sheets MRC1,MRC2  # NuROアノテーション用
 ```
 
 - `eval_review.py` ＋ `data/review_eval/gold_expectations.yaml`：**性質ベース**の自動判定（「PWRでフィルタしたらPWRだけ返る」等）。単発runの網羅率100%は追わない（過剰適合回避・RAG_VERIFICATION 付録A-3）。

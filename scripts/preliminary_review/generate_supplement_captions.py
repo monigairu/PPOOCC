@@ -2,9 +2,9 @@
 補足資料（Excel/PPTX）から画像を抽出し Gemini でキャプションを生成するスクリプト
 
 実行方法:
-    uv run python scripts/generate_supplement_captions.py           # 全ファイル処理
-    uv run python scripts/generate_supplement_captions.py --file 東北電力_補足.xlsx
-    uv run python scripts/generate_supplement_captions.py --dry-run # Gemini呼び出しなし（画像抽出のみ確認）
+    uv run python scripts/preliminary_review/generate_supplement_captions.py           # 全ファイル処理
+    uv run python scripts/preliminary_review/generate_supplement_captions.py --file 東北電力_補足.xlsx
+    uv run python scripts/preliminary_review/generate_supplement_captions.py --dry-run # Gemini呼び出しなし（画像抽出のみ確認）
 
 出力:
     data/knowledge/supplement_captions/{source_file_stem}.json
@@ -32,7 +32,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
-sys.path.insert(0, str(Path(__file__).parent.parent))
+sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 from google import genai
 from google.genai import types
@@ -320,7 +320,7 @@ def main() -> None:
 
     print(f"\n完了: 合計 {total} 件のキャプションを生成しました")
     if not args.dry_run:
-        print("次のステップ: uv run python scripts/ingest_knowledge.py --target supplement")
+        print("次のステップ: uv run python scripts/preliminary_review/ingest_knowledge.py --target supplement")
 
 
 if __name__ == "__main__":

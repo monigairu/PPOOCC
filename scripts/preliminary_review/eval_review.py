@@ -8,7 +8,7 @@
 確定後に provisional: false へ変えるとハードな回帰ゲート（FAILでexit=1）になる。
 ケース・期待値の追加変更は YAML 編集のみで完結し、本スクリプトは変更不要。
 
-実行：uv run python scripts/eval_review.py
+実行：uv run python scripts/preliminary_review/eval_review.py
 """
 from __future__ import annotations
 
@@ -17,16 +17,17 @@ import asyncio
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).parent.parent))
+sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 import yaml
 
 # Excel→mappings復元・クエリ文脈導出は result_reader が正本（verify_rag経由の間接importは廃止）
-from apps.backend.app.agents.reviewer.result_reader import (
+from apps.backend.app.preliminary_review.knowledge.result_reader import (
     reconstruct_mappings_from_excel,
     derive_query_context,
 )
-from apps.backend.app.agents.reviewer import reviewer_agent, knowledge_loader
+from apps.backend.app.preliminary_review import agent as reviewer_agent
+from apps.backend.app.preliminary_review.knowledge import knowledge_loader
 
 DEFAULT_EXPECT = Path("data/review_eval/gold_expectations.yaml")
 _LAW_WORDS = ("法令", "条文", "規制", "通達")

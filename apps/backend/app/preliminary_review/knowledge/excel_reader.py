@@ -151,7 +151,7 @@ def to_ver53_rows(
 def _apply_bq_field_defaults(knowledge_type: str, rows: list[dict[str, Any]]) -> None:
     """knowledge_type ごとの ingest 時フィールド補正（検索側と一貫させる）。"""
     # 循環import回避のため関数内import（knowledge_loader は検索バックエンドに依存する）
-    from apps.backend.app.agents.reviewer.knowledge_loader import normalize_utility
+    from apps.backend.app.preliminary_review.knowledge.knowledge_loader import normalize_utility
 
     if knowledge_type == "f3":
         # 会社名は検索側（load_f3）・直接投入（_build_document）と同じ正規化で表記ゆれを吸収

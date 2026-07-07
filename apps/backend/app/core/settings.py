@@ -11,7 +11,9 @@
 
 責務範囲：
     - ディレクトリパスの自動設定（Paths モジュールからの委譲）。
-    - 各種外部 API（Document AI, Gemini, Vertex Search）の接続情報・パラメータ設定のロード。
+    - 各種外部 API（Document AI, Gemini）の接続情報・パラメータ設定のロード。
+      （事前レビュー固有の Vertex Search / Reranking / BigQuery 設定は
+       `apps.backend.app.preliminary_review.config` に分離）
     - 認証、セキュリティ、アップロード制限の設定。
     - 例外：本モジュール自体は値の動的バリデーションや、外部サービスとの疎通確認などは行わない。
 
@@ -29,7 +31,7 @@ Returns:
 
 Failure Behavior:
     - `.env` が存在しない場合は、OS の環境変数から直接ロードを試みる（`load_dotenv` は失敗せずにスキップされる）。
-    - 必須ではない変数（例：`VERTEX_SEARCH_*`）が不足している場合、空文字列（`""`）等のデフォルト値が設定され
+    - 必須ではない変数が不足している場合、空文字列（`""`）等のデフォルト値が設定され
       該当機能へのアクセス時に初めてエラーとなる（遅延フェイルファスト）。
     - 整数変換（`int(os.environ.get(...))`）対象の変数に数値以外が設定されていた場合、
       モジュールロード時（起動時）に `ValueError` が送出され、アプリケーションは起動に失敗する。
@@ -157,41 +159,8 @@ MAX_TRANSCRIBE_FILES   = int(os.environ.get("MAX_TRANSCRIBE_FILES", "10"))
 MAX_UPLOAD_FILE_BYTES  = int(os.environ.get("MAX_UPLOAD_FILE_BYTES", str(50 * 1024 * 1024)))
 MAX_UPLOAD_TOTAL_BYTES = int(os.environ.get("MAX_UPLOAD_TOTAL_BYTES", str(150 * 1024 * 1024)))
 
-# Vertex AI Search データストアID・エンジンID
-# create_datastores.py で作成後に .env へ追記する
-VERTEX_SEARCH_F2_DATASTORE_ID = os.environ.get("VERTEX_SEARCH_F2_DATASTORE_ID", "")
-VERTEX_SEARCH_F3_DATASTORE_ID = os.environ.get("VERTEX_SEARCH_F3_DATASTORE_ID", "")
-VERTEX_SEARCH_F2_ENGINE_ID    = os.environ.get("VERTEX_SEARCH_F2_ENGINE_ID", "")
-VERTEX_SEARCH_F3_ENGINE_ID    = os.environ.get("VERTEX_SEARCH_F3_ENGINE_ID", "")
-VERTEX_SEARCH_SUPPLEMENT_DATASTORE_ID = os.environ.get("VERTEX_SEARCH_SUPPLEMENT_DATASTORE_ID", "")
-VERTEX_SEARCH_SUPPLEMENT_ENGINE_ID    = os.environ.get("VERTEX_SEARCH_SUPPLEMENT_ENGINE_ID", "")
-
-# BigQuery平坦テーブルを索引する構造化データストア（§0-7 R3・Step1）
-VERTEX_SEARCH_F3_BQ_DATASTORE_ID = os.environ.get("VERTEX_SEARCH_F3_BQ_DATASTORE_ID", "")
-VERTEX_SEARCH_F3_BQ_ENGINE_ID    = os.environ.get("VERTEX_SEARCH_F3_BQ_ENGINE_ID", "")
-VERTEX_SEARCH_F2_BQ_DATASTORE_ID = os.environ.get("VERTEX_SEARCH_F2_BQ_DATASTORE_ID", "")
-VERTEX_SEARCH_F2_BQ_ENGINE_ID    = os.environ.get("VERTEX_SEARCH_F2_BQ_ENGINE_ID", "")
-
-# ── Reranking（Agent Search Ranking API・§3-2 採用方針／Step5）──────────────
-# ハイブリッド検索の結果を semantic-ranker で関連度順に並べ替え、surfacing を底上げする。
-# _search() 後段に適用（I/F不変）。RankService は google-cloud-discoveryengine に同梱。
-RERANK_ENABLED = _env_bool("RERANK_ENABLED", True)
-# 再現性のため @latest でなくバージョンをピン留め（-004＝25言語対応・1024トークン・2025-04 GA）
-RERANK_MODEL   = os.environ.get("RERANK_MODEL", "semantic-ranker-default-004")
-# F2（費目非保持ナレッジ）の関連性ガード判定に使うスコア閾値（§1-18 の正式方針）。
-# PoC実データで校正：semantic-ranker は費目クエリに対し F3=0.20〜0.36（費目特化で強関連）／
-# F2=0.04〜0.08（NuRO内知見ゆえ弱関連）と2.5倍のギャップで分離する。この gap の中間 0.15 に置くと、
-# F2は「意味的に強関連なとき（例：主題一致で0.37）」のみ根拠採用され、字面2文字の偽陽性
-# （放射線管理⇔放射性が0.05）は確実に不採用になる。件数規模が変わったら env で再校正する。
-RERANK_GUARD_F2_THRESHOLD = _env_float("RERANK_GUARD_F2_THRESHOLD", 0.15)
-
-# ── BigQuery（F2/F3知識のデータ置き場・REQUIREMENTS §0-7 / RAG_VERIFICATION §3-3） ─────────────────────────
-# Excel（正本）→ 平坦化(ver5.3) → BigQuery → Agent Search索引 → RAG検索
-# BigQuery 自体は検索しない（Agent Search がこのテーブルを索引する）
-BIGQUERY_DATASET_ID = os.environ.get("BIGQUERY_DATASET_ID", "nuro_knowledge")
-BIGQUERY_F3_TABLE_ID = os.environ.get("BIGQUERY_F3_TABLE_ID", "f3_flat_ver53")
-BIGQUERY_F2_TABLE_ID = os.environ.get("BIGQUERY_F2_TABLE_ID", "f2_flat_ver53")
-BIGQUERY_LOCATION    = os.environ.get("BIGQUERY_LOCATION", "asia-northeast1")
+# 事前レビュー（RAG）固有の設定（Vertex AI Search・Reranking・BigQuery）は
+# apps/backend/app/preliminary_review/config.py に移設した。
 
 # ── CORS ─────────────────────────
 # 本番環境ではデプロイ先URLに変更する

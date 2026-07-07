@@ -501,14 +501,14 @@ knowledge_loader.load_supplement()
 
 ### 14-4. 新規追加スクリプト
 
-#### `scripts/generate_supplement_captions.py`（新規）
+#### `scripts/preliminary_review/generate_supplement_captions.py`（新規）
 
 ```
 役割  : 補足資料ファイルから画像を抽出し Gemini 3 でキャプションを生成する
 入力  : data/knowledge/supplement/*.xlsx / *.pptx
 出力  : data/knowledge/supplement_captions/{source_file}.json
-実行  : uv run python scripts/generate_supplement_captions.py
-       uv run python scripts/generate_supplement_captions.py --file 東北電力_補足.xlsx
+実行  : uv run python scripts/preliminary_review/generate_supplement_captions.py
+       uv run python scripts/preliminary_review/generate_supplement_captions.py --file 東北電力_補足.xlsx
 
 出力JSONの1件の構造:
   {
@@ -532,7 +532,7 @@ knowledge_loader.load_supplement()
 
 使用モデル: `gemini-3-flash-preview`（マルチモーダル・1M トークン対応）
 
-#### `scripts/create_datastores.py`（追記）
+#### `scripts/preliminary_review/create_datastores.py`（追記）
 
 `nuro-supplement-knowledge` データストアを追加する。
 
@@ -545,7 +545,7 @@ knowledge_loader.load_supplement()
 }
 ```
 
-#### `scripts/ingest_knowledge.py`（追記）
+#### `scripts/preliminary_review/ingest_knowledge.py`（追記）
 
 `--target supplement` オプションを追加し、生成済みキャプション JSON を Vertex AI Search に投入する。
 
@@ -570,9 +570,9 @@ knowledge_loader.load_supplement()
 | `pyproject.toml` | `python-pptx` を依存追加 | — |
 | `apps/backend/app/core/settings.py` | `VERTEX_SEARCH_SUPPLEMENT_DATASTORE_ID` / `_ENGINE_ID` を追加 | なし |
 | `apps/backend/app/agents/reviewer/knowledge_loader.py` | `load_supplement()` 内部を Vertex AI Search 化 | **なし**（引数・戻り値は不変） |
-| `scripts/create_datastores.py` | supplement データストアのエントリを追加 | — |
-| `scripts/ingest_knowledge.py` | `--target supplement` オプションを追加 | — |
-| `scripts/generate_supplement_captions.py` | **新規作成** | — |
+| `scripts/preliminary_review/create_datastores.py` | supplement データストアのエントリを追加 | — |
+| `scripts/preliminary_review/ingest_knowledge.py` | `--target supplement` オプションを追加 | — |
+| `scripts/preliminary_review/generate_supplement_captions.py` | **新規作成** | — |
 | `apps/backend/tests/test_review_e2e.py` | supplement モックを Vertex AI Search レスポンス形式に更新 | — |
 
 変更不要なファイル: `reviewer_agent.py`・`adk/agents.py`（`supplement_node()`）・API エンドポイント・フロントエンド

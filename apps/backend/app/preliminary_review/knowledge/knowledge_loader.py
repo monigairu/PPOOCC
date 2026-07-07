@@ -40,6 +40,8 @@ from google.api_core.exceptions import GoogleAPICallError
 from apps.backend.app.core.settings import (
     GCP_LOCATION,
     GCP_PROJECT_ID,
+)
+from apps.backend.app.preliminary_review.config import (
     RERANK_ENABLED,
     RERANK_MODEL,
     VERTEX_SEARCH_F2_BQ_DATASTORE_ID,

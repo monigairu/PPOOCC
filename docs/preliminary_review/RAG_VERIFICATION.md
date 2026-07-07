@@ -17,7 +17,7 @@
   プロンプト改修＋費目関連性ガードで **F2/F3 根拠の指摘が安定発火**（誤grounding/ハルシネーションも抑制）。
 - **PoC検証マトリクス（難易度1〜4×2軸）全PASS**。回帰テスト `test_review_e2e.py` **36 passed**。
 - **スコープ**：F2/F3＋Tool5＋観点。**Tool3（類似工事）・Tool4（補足資料）はPoC範囲外**。
-- 検証は既存の upload→Firestore→/review フローへ非破壊（並存）。常設ハーネス `scripts/verify_rag.py` で再現可。
+- 検証は既存の upload→Firestore→/review フローへ非破壊（並存）。常設ハーネス `scripts/preliminary_review/verify_rag.py` で再現可。
 
 ---
 
@@ -39,10 +39,10 @@
 | 12 | **BigQuery→Agent Search 経路の本採用**（2026-07-02・Step1） | `Excel→平坦化(ver5.3)→BigQuery→Agent Search索引` を実装し、マトリクス全PASSで本採用（measure-first・二系統フォールバック不要だった）。`_to_record` に cost_category→fee_type 互換エイリアス（relevance guard の grounding降格防止） | `ingest_knowledge.py`／`knowledge_loader.py` |
 | 13 | **F2 も BigQuery平坦化に統一**（2026-07-03） | F3と同じ `Excel→平坦化(ver5.3)→BigQuery(f2_flat_ver53)→Agent Search索引(nuro-f2-bq-knowledge)`。`to_ver53_rows` を knowledge_type 駆動に一般化（`VER53_SCHEMA` レジストリ・F2固有列＝業務カテゴリ/事象概要/判断基準等）。F2 も message_id 衝突で 86→44件消失していたのが復活。`caller_role_required=NuRO` を定数付帯列としてingest時付与（load_f2 の権限フィルタ用） | `_excel_reader.py`／`ingest_knowledge.py`／`settings.py` |
 | 14 | **アーキテクチャ図のファイル分割＋親玉関数化**（2026-07-03） | 上司指示により、事前レビュー(RAG)系のアーキテクチャ図を `docs/preliminary_review/ARCHITECTURE.md` に分割（様式自動作成は `docs/architecture.md` に残置）。ナレッジ供給パイプラインに親玉関数 `excel_to_bq_input()`（Excel読み取り結果→BigQueryインプットへ加工。`to_ver53_rows`＋`_apply_bq_field_defaults`＋message_id検証を束ねる）を新設し、既存の `run_review()`/`run_workflow()`/`load_f2/f3()` 等と合わせて親玉関数一覧をB-0に整理。リファクタ前後でBigQuery行の出力完全一致を確認（ゴールデン比較・F2=86行/F3=271行） | `_excel_reader.py`／`ingest_knowledge.py`／`docs/preliminary_review/ARCHITECTURE.md` |
-| 15 | **ワークブック統括関数 `review_workbook()`（Step2）**（2026-07-04） | 任意の転記結果Excelを**ファイルパスだけで全シート一括レビュー**する統括関数を `reviewer_agent.py` に追加（新規.pyなし・`run_review` I/F不変で呼ぶだけ）。config のシート一覧を列挙→シート毎に「mappings復元→`run_review`」、復元不能シートはスキップ、クエリ文脈（費目・炉型・会社）は基本情報シートから申請単位で導出、Firestore保存はしない（保存はAPI層の責務のまま）。`verify_rag.py` は表示・レポート整形のみの薄ラッパ化（`--sheet` 未指定で全シート一括が既定に）。今後の開発から Docstring は Google スタイル（入出力データを明示）で記載 | `reviewer_agent.py`／`scripts/verify_rag.py`／`test_review_e2e.py`（+8件） |
-| 16 | **無条件ffill廃止＝捏造メッセージの根絶（真の件数 F3=209/F2=56）**（2026-07-04） | 生Excelとの全件突合で、`_read_excel_by_schema` の全列無条件 `ffill`（`merge_cell_handling: fill_down` の誤実装）が**結合と無関係な空セルに上の行の値を染み出させ、存在しないメッセージを捏造**していたことを発見（例：02_1G_0005の2往復目が別会社スレッド02_1G_0006に複製）。正本の結合セルはヘッダー行のみでデータ領域にゼロ＝ffillは害のみ。**従来の F3=271/F2=86 は水増しで、真の件数は F3=209/F2=56**（差分 62+30件が幻・誤ったID/発電所/費目メタデータ付きで索引されていた）。修正＝ffill廃止し `_expand_merged_cells()`（openpyxlの結合範囲に限定してアンカー値展開）に置換。本物のメッセージは修正前後で完全一致（message_id・内容とも差分0）。再ingest後 BigQuery=209/56 行で Excel再生成と完全一致・マトリクス全PASS。恒久検証は `scripts/verify_extraction.py`（生Excelを独立実装で読み直して突合・§4） | `_excel_reader.py`／`scripts/verify_extraction.py`／`test_review_e2e.py`（行独立性+3件） |
-| 17 | **F2 grounding の構造的解禁（一般改善・資料非依存）**（2026-07-04） | F2根拠の指摘が実データで一度も出ない真因は入力不足でなく**関連性ガードの構造的副作用**。ガードは「引用の費目が申請費目と語を共有しなければAI知見へ降格」するが、**F2は費目列を持たない**（NuRO内共有＝費目横断）ため `fee_type=None`→`_fee_related` が必ず False→**F2根拠は100%降格＝永久にゼロ**だった。修正：`_record_relevant` を新設し、費目を持つF3は従来どおり費目トークン、**費目を持たないF2は内容語（業務カテゴリ・事象概要・メッセージ内容）の重なり**で関連性判定（`_content_tokens`・ハードコードなし）。併せてプロンプトでF2をF3と対等な根拠源に格上げ（`[F2#N]` を明記）。安全側：難4を `forbid_f2_grounded` で強化（F2の誤groundingもハードゲート）。**特定入力・特定F2に依存しない一般則**で、resolveすべきは「情報源クラスの公平性」。既知の限界＝内容語2文字トークンの稀な部分一致偽陽性（例 放射線管理⇔放射性が"放射"で一致）は決定論ガード＋難4多層で抑制、一般的堅牢化は Reranking(§3-2)。実データでは費目特化のF3が precedent を豊富に持つためF3優位は継続（＝より直接関連する源が選ばれる正しい挙動・§5） | `_review_logic.py`（`apply_relevance_guard`/`_record_relevant`/`_content_tokens`/プロンプト）／`scripts/eval_review.py`／`gold_expectations.yaml` |
-| 18 | **コードレビュー対応（読み込み一本化・ガード判別強化）**（2026-07-04） | high効率レビューの指摘に対応：①Excel読み込みを**openpyxl 1回読みに統一**（旧: pd.read_excel＋結合範囲取得のための再読込＝二重ロード。テスト都合の `exists()` ガードも撤去し、pd.read_excelモックのテスト2件は実ファイル生成に書き換え）②関連性ガードの内容語フォールバックは**費目フィールド（fee_type/cost_category）を持たないレコード（F2）に限定**（費目が空のF3は従来どおり不採用＝誤groundingリスク回避）③verify_rag の①検索ダンプの文脈導出を `review_workbook()` と同一の呼び方に統一（①と②の文脈食い違い解消）。等価性証明＝`verify_extraction --bigquery` でBQ（修正前出力）と**内容差分0**・回帰53 PASS・マトリクス全PASS。**F2内容語の2文字部分一致偽陽性（例: 放射線管理⇔放射性）の根本解は Step5 Reranking のスコア閾値をガード判定に使う方針で確定**（字面での根治は正当ケースまで殺すため不可・現代RAGの標準はクロスエンコーダ再ランク） | `_excel_reader.py`／`_review_logic.py`／`scripts/verify_rag.py`／`test_review_e2e.py` |
+| 15 | **ワークブック統括関数 `review_workbook()`（Step2）**（2026-07-04） | 任意の転記結果Excelを**ファイルパスだけで全シート一括レビュー**する統括関数を `reviewer_agent.py` に追加（新規.pyなし・`run_review` I/F不変で呼ぶだけ）。config のシート一覧を列挙→シート毎に「mappings復元→`run_review`」、復元不能シートはスキップ、クエリ文脈（費目・炉型・会社）は基本情報シートから申請単位で導出、Firestore保存はしない（保存はAPI層の責務のまま）。`verify_rag.py` は表示・レポート整形のみの薄ラッパ化（`--sheet` 未指定で全シート一括が既定に）。今後の開発から Docstring は Google スタイル（入出力データを明示）で記載 | `reviewer_agent.py`／`scripts/preliminary_review/verify_rag.py`／`test_review_e2e.py`（+8件） |
+| 16 | **無条件ffill廃止＝捏造メッセージの根絶（真の件数 F3=209/F2=56）**（2026-07-04） | 生Excelとの全件突合で、`_read_excel_by_schema` の全列無条件 `ffill`（`merge_cell_handling: fill_down` の誤実装）が**結合と無関係な空セルに上の行の値を染み出させ、存在しないメッセージを捏造**していたことを発見（例：02_1G_0005の2往復目が別会社スレッド02_1G_0006に複製）。正本の結合セルはヘッダー行のみでデータ領域にゼロ＝ffillは害のみ。**従来の F3=271/F2=86 は水増しで、真の件数は F3=209/F2=56**（差分 62+30件が幻・誤ったID/発電所/費目メタデータ付きで索引されていた）。修正＝ffill廃止し `_expand_merged_cells()`（openpyxlの結合範囲に限定してアンカー値展開）に置換。本物のメッセージは修正前後で完全一致（message_id・内容とも差分0）。再ingest後 BigQuery=209/56 行で Excel再生成と完全一致・マトリクス全PASS。恒久検証は `scripts/preliminary_review/verify_extraction.py`（生Excelを独立実装で読み直して突合・§4） | `_excel_reader.py`／`scripts/preliminary_review/verify_extraction.py`／`test_review_e2e.py`（行独立性+3件） |
+| 17 | **F2 grounding の構造的解禁（一般改善・資料非依存）**（2026-07-04） | F2根拠の指摘が実データで一度も出ない真因は入力不足でなく**関連性ガードの構造的副作用**。ガードは「引用の費目が申請費目と語を共有しなければAI知見へ降格」するが、**F2は費目列を持たない**（NuRO内共有＝費目横断）ため `fee_type=None`→`_fee_related` が必ず False→**F2根拠は100%降格＝永久にゼロ**だった。修正：`_record_relevant` を新設し、費目を持つF3は従来どおり費目トークン、**費目を持たないF2は内容語（業務カテゴリ・事象概要・メッセージ内容）の重なり**で関連性判定（`_content_tokens`・ハードコードなし）。併せてプロンプトでF2をF3と対等な根拠源に格上げ（`[F2#N]` を明記）。安全側：難4を `forbid_f2_grounded` で強化（F2の誤groundingもハードゲート）。**特定入力・特定F2に依存しない一般則**で、resolveすべきは「情報源クラスの公平性」。既知の限界＝内容語2文字トークンの稀な部分一致偽陽性（例 放射線管理⇔放射性が"放射"で一致）は決定論ガード＋難4多層で抑制、一般的堅牢化は Reranking(§3-2)。実データでは費目特化のF3が precedent を豊富に持つためF3優位は継続（＝より直接関連する源が選ばれる正しい挙動・§5） | `_review_logic.py`（`apply_relevance_guard`/`_record_relevant`/`_content_tokens`/プロンプト）／`scripts/preliminary_review/eval_review.py`／`gold_expectations.yaml` |
+| 18 | **コードレビュー対応（読み込み一本化・ガード判別強化）**（2026-07-04） | high効率レビューの指摘に対応：①Excel読み込みを**openpyxl 1回読みに統一**（旧: pd.read_excel＋結合範囲取得のための再読込＝二重ロード。テスト都合の `exists()` ガードも撤去し、pd.read_excelモックのテスト2件は実ファイル生成に書き換え）②関連性ガードの内容語フォールバックは**費目フィールド（fee_type/cost_category）を持たないレコード（F2）に限定**（費目が空のF3は従来どおり不採用＝誤groundingリスク回避）③verify_rag の①検索ダンプの文脈導出を `review_workbook()` と同一の呼び方に統一（①と②の文脈食い違い解消）。等価性証明＝`verify_extraction --bigquery` でBQ（修正前出力）と**内容差分0**・回帰53 PASS・マトリクス全PASS。**F2内容語の2文字部分一致偽陽性（例: 放射線管理⇔放射性）の根本解は Step5 Reranking のスコア閾値をガード判定に使う方針で確定**（字面での根治は正当ケースまで殺すため不可・現代RAGの標準はクロスエンコーダ再ランク） | `_excel_reader.py`／`_review_logic.py`／`scripts/preliminary_review/verify_rag.py`／`test_review_e2e.py` |
 | 19 | **Reranking 実装（Step5・§3-2 の採用方針を実装＋#18偽陽性の根治）**（2026-07-05） | Agent Search の **Ranking API（`semantic-ranker-default-004`・25言語/1024トークン・2025-04 GA・依存追加なし）** を `knowledge_loader._search()` 後段の `_rerank()` として実装（並べ替えのみ・件数は削らない・API失敗時は元順で素通し＝検索を止めない）。`load_f2/f3/supplement` は無変更で恩恵。**#18のF2偽陽性を意味スコアで根治**：ガード `_record_relevant` のF2分岐を「`_rerank_score >= 閾値`」に変更（スコア無し時は内容語へフォールバック）。**実測校正**：semantic-ranker は費目クエリに対し F3=0.20〜0.36（費目特化で強関連）／F2=0.04〜0.08（NuRO内知見ゆえ弱関連）と**2.5倍のギャップで分離**するため閾値を gap 中間 **0.15**（`RERANK_GUARD_F2_THRESHOLD`・env可）に設定。これにより F2は主題一致で強関連なとき（例0.37）のみ根拠採用、字面2文字の偽陽性（放射性=0.05）は確実に不採用。**F3優位は reranker スコアでも裏付け**（F3が費目に直接強関連＝正しい挙動）。設定 `RERANK_ENABLED`(既定on)/`RERANK_MODEL`/`RERANK_GUARD_F2_THRESHOLD`。回帰61 PASS・マトリクス全PASS・rerank off で従来挙動へ完全フォールバック確認 | `knowledge_loader.py`／`_review_logic.py`／`settings.py`／`adk/agents.py`(trace top_scores)／`test_review_e2e.py`（+8件） |
 | 19b | **Step5 コードレビュー対応（堅牢化7件）**（2026-07-05） | high効率レビューの指摘に対応（回帰68 PASS・マトリクス全PASS）：①**ガードのスコア意味論を明文化**＝F2スコアは検索クエリ（費目＋工事件名・§1-7で意図的に広げた）への関連度であり「同一工事のNuRO内知見も関連」は意図した挙動、と `_record_relevant` docstring/コメントに明記（字面条件の再導入はしない＝#17趣旨堅持）②**F2全降格の観測ログ**＝`apply_relevance_guard` でF2が1件も関連判定されない時に warning（モデル/閾値ずれによる無音回帰の早期検知）＋降格時に info ③**`_rerank` の id 重複・負数・範囲外を採用済みindex集合で防御**（二重採用/取りこぼし防止・`query or "工事"` 死コード除去）④`_env_float` で閾値の不正env値を既定退避＝**import時クラッシュ防止**（アプリ全体停止を回避）⑤`_env_bool` で `1/yes/on` 等の真値も許容 ⑥テスト強化＝`_search`→`_rerank` 配線・スコア救済（費目と語を共有しない高スコア）・id重複/負数・caption経路 ⑦**補足資料(Tool4)は `caption` を rerank content に使用**（PoCではDS未設定で潜在だが1行で予防）。据え置き＝レガシー直接投入の空費目F3（現BQ経路では非発生）・炉型経路の過剰rerank（PoC規模で無視可・本番§3-1で最適化） | `knowledge_loader.py`／`_review_logic.py`／`settings.py`／`test_review_e2e.py`（+7件） |
 | 20 | **空欄項目の指摘の番地誤爆を決定論で是正（`reanchor_review_items`）**（2026-07-06） | 空欄フィールド（値が無く mappings に載らない項目）への指摘は、LLM が正しいセル番地を知らず**可視セルへ誤爆**する（実例：実施費用低減策の指摘が工事件名 C6 に付きハイライトが誤る）。真因＝`empty_cells` は mappings 由来で空欄項目を含まず、LLM はその番地を渡されないため推測する。修正：LLM生成後に**様式定義（config）から `field_name→正しいセル` を解決して補正**する `reanchor_review_items`（`apply_relevance_guard` 後に実行）。plan_actual は計画実績区分で計画=plan列/実績=actual列を選択、複数セクション定義（炉型＝C7とG9）は候補を和集合し**有効セルは温存**、**config一覧に無い field（表・LLM言い換え）は一切触らない**（安全側・特定費目/セルのハードコードなし）。measure-first：当初 LLM へ全定義項目を渡す補完（②）も試したが**難4ハードゲートを破る過検出**が出たため撤去し、①決定論補正のみ採用（回帰74 PASS・マトリクス全PASS） | `_review_logic.py`（`reanchor_review_items`/`_field_anchor_map`）／`adk/agents.py`／`test_review_e2e.py`（+6件） |
@@ -155,16 +155,16 @@ flowchart TD
 ---
 
 ## 4. 検証基盤・再現手順
-- `scripts/verify_rag.py`：疎通／検索ヒット中身／レビュー出力を実データで検証（レビュー実行本体は `review_workbook()` へ委譲する薄ラッパ）。
-- `scripts/verify_extraction.py`：**Excel抽出の正当性検証**。生Excelを独立実装で読み直し、①ナレッジ平坦化（行消失・message_id採番・捏造・染み出し）と②レビュー様式のmappings復元（取り逃し・値違い・動的表打ち切り）を全件突合。`--bigquery` でBQ実テーブルとも突合。問題ありなら終了コード1。
-- `scripts/eval_review.py` ＋ `data/review_eval/gold_expectations.yaml`：PoC検証マトリクス（難易度1〜4×2軸）を性質ベースで自動判定。
-- `scripts/review_annotation.py`：AI指摘一覧＋ゴールド網羅状況を Markdown 出力（NuROが○×記入）。
-- 関東ダミーF3生成：`scripts/generate_kanto_f3.py`（他社ダミー＝北の海電力F3は無改変・炉型列のみ非破壊追記）。
+- `scripts/preliminary_review/verify_rag.py`：疎通／検索ヒット中身／レビュー出力を実データで検証（レビュー実行本体は `review_workbook()` へ委譲する薄ラッパ）。
+- `scripts/preliminary_review/verify_extraction.py`：**Excel抽出の正当性検証**。生Excelを独立実装で読み直し、①ナレッジ平坦化（行消失・message_id採番・捏造・染み出し）と②レビュー様式のmappings復元（取り逃し・値違い・動的表打ち切り）を全件突合。`--bigquery` でBQ実テーブルとも突合。問題ありなら終了コード1。
+- `scripts/preliminary_review/eval_review.py` ＋ `data/review_eval/gold_expectations.yaml`：PoC検証マトリクス（難易度1〜4×2軸）を性質ベースで自動判定。
+- `scripts/preliminary_review/review_annotation.py`：AI指摘一覧＋ゴールド網羅状況を Markdown 出力（NuROが○×記入）。
+- 関東ダミーF3生成：`scripts/preliminary_review/generate_kanto_f3.py`（他社ダミー＝北の海電力F3は無改変・炉型列のみ非破壊追記）。
 ```
-uv run python scripts/verify_rag.py --smoke-only                          # 疎通
-uv run python scripts/verify_rag.py --excel <結果.xlsx> [--retrieval-only] # 検索/フル
-uv run python scripts/eval_review.py                                       # マトリクス
-uv run python scripts/review_annotation.py --excel <結果.xlsx> --sheets MRC1,MRC2
+uv run python scripts/preliminary_review/verify_rag.py --smoke-only                          # 疎通
+uv run python scripts/preliminary_review/verify_rag.py --excel <結果.xlsx> [--retrieval-only] # 検索/フル
+uv run python scripts/preliminary_review/eval_review.py                                       # マトリクス
+uv run python scripts/preliminary_review/review_annotation.py --excel <結果.xlsx> --sheets MRC1,MRC2
 ```
 
 ---
@@ -173,7 +173,7 @@ uv run python scripts/review_annotation.py --excel <結果.xlsx> --sheets MRC1,M
 
 事前レビューのPoC受け入れ基準（提案資料の「ナレッジ検索精度／LLMレビュー品質 × 難易度1〜4」）に対する
 **実測ベース**の到達状況。ここでの大前提は「**特定の資料に作り込んで通す（資料依存）のではなく、転記内容に
-応じてRAGが一般に機能すること**」。数値は `scripts/eval_review.py`（`gold_expectations.yaml`）の最新runより。
+応じてRAGが一般に機能すること**」。数値は `scripts/preliminary_review/eval_review.py`（`gold_expectations.yaml`）の最新runより。
 
 ### 軸① ナレッジ検索精度
 | 難易度 | 基準 | 状況 | 根拠／留意 |

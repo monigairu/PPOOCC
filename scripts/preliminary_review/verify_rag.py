@@ -12,9 +12,9 @@ RAG実機能検証ハーネス（PoC検証用・既存システム非破壊）
                        review_items + retrieval_trace を出力。
 
 使い方:
-  uv run python scripts/verify_rag.py --excel data/form_generation/output/<結果>.xlsx
-  uv run python scripts/verify_rag.py --excel <...> --smoke-only      # 疎通確認のみ
-  uv run python scripts/verify_rag.py --excel <...> --retrieval-only  # Geminiを呼ばず検索だけ
+  uv run python scripts/preliminary_review/verify_rag.py --excel data/form_generation/output/<結果>.xlsx
+  uv run python scripts/preliminary_review/verify_rag.py --excel <...> --smoke-only      # 疎通確認のみ
+  uv run python scripts/preliminary_review/verify_rag.py --excel <...> --retrieval-only  # Geminiを呼ばず検索だけ
   オプション: --frame frameB --sheet MRC1 --utility "AA電力"
   ※ --sheet 未指定なら config/{frame}/ に定義された全シート（MRC1・MRC2等）を一括レビュー。
 
@@ -36,11 +36,13 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-sys.path.insert(0, str(Path(__file__).parent.parent))
+sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 from apps.backend.app.core import settings
-from apps.backend.app.agents.reviewer import knowledge_loader, reviewer_agent
-from apps.backend.app.agents.reviewer.result_reader import derive_query_context
+from apps.backend.app.preliminary_review import config as review_config
+from apps.backend.app.preliminary_review import agent as reviewer_agent
+from apps.backend.app.preliminary_review.knowledge import knowledge_loader
+from apps.backend.app.preliminary_review.knowledge.result_reader import derive_query_context
 
 REPORT_DIR = Path("data/verification")
 _SNIPPET = 160  # content抜粋の最大文字数
@@ -52,9 +54,9 @@ def smoke_check() -> dict[str, Any]:
     info: dict[str, Any] = {
         "GCP_PROJECT_ID":     settings.GCP_PROJECT_ID,
         "GCP_LOCATION":       settings.GCP_LOCATION,
-        "F2_DATASTORE_ID":    settings.VERTEX_SEARCH_F2_DATASTORE_ID,
-        "F3_DATASTORE_ID":    settings.VERTEX_SEARCH_F3_DATASTORE_ID,
-        "SUPPLEMENT_DS_ID":   settings.VERTEX_SEARCH_SUPPLEMENT_DATASTORE_ID or "(未設定)",
+        "F2_DATASTORE_ID":    review_config.VERTEX_SEARCH_F2_DATASTORE_ID,
+        "F3_DATASTORE_ID":    review_config.VERTEX_SEARCH_F3_DATASTORE_ID,
+        "SUPPLEMENT_DS_ID":   review_config.VERTEX_SEARCH_SUPPLEMENT_DATASTORE_ID or "(未設定)",
     }
     print("=" * 70)
     print(" 疎通確認 (smoke check)")
@@ -71,7 +73,7 @@ def smoke_check() -> dict[str, Any]:
         print(f"\n  ✅ Vertex AI Search 到達OK: {detail}")
         if not hits:
             print("     ⚠️ 0件です。datastore は到達できるがデータ未投入の可能性。")
-            print("        → uv run python scripts/ingest_knowledge.py --target all")
+            print("        → uv run python scripts/preliminary_review/ingest_knowledge.py --target all")
     except Exception as e:  # noqa: BLE001
         detail = f"{type(e).__name__}: {e}"
         print(f"\n  ❌ Vertex AI Search 到達NG: {detail}")
