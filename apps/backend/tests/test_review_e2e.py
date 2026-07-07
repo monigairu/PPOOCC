@@ -1307,3 +1307,113 @@ class TestMissingEntryGolden:
                 f"{sheet}: 期待 {self._KNOWN_GAPS[sheet]} に対し検出 {detected}"
             )
 
+
+
+class TestProseCitationResolution:
+    """散文引用（Gemini 3.5系の形式ゆれ）の決定論解決（apply_relevance_guard）。"""
+
+    _MAPS = [{"field_name": "対象費目1", "cell_address": "G6", "value": "施設解体一解体費"}]
+
+    def _f3(self, doc_id, fee="解体撤去費"):
+        return {"cost_category": fee, "fee_type": fee,
+                "message_content": "工数・単価の積算根拠を提出されたい", "_doc_id": doc_id}
+
+    def _item(self, evidence, src="F3"):
+        from apps.backend.app.api.models import ReviewItem
+        return ReviewItem(item_id="", field_name="解体機器表_30_計画_費用", cell_address="J30",
+                          severity="AIからの指摘", comment="根拠不明", evidence=evidence,
+                          knowledge_source=src)
+
+    def test_prose_citation_resolved_and_normalized(self):
+        """メッセージID散文引用を逆引きし、F3根拠を維持・参照番号形式へ正規化する"""
+        from apps.backend.app.agents.reviewer._review_logic import apply_relevance_guard
+        f3_own = [self._f3("03_KT_1G_01_0003_01"), self._f3("03_KT_1G_01_0003_02")]
+        it = self._item("【F3ナレッジ（自社：関東電力）｜シートKNI_1G_01｜メッセージID 03_KT_1G_01_0003_02】, "
+                        "【F3ナレッジ（自社：関東電力）｜シートKNI_1G_01｜メッセージID 03_KT_1G_01_0003_01】")
+        apply_relevance_guard([it], self._MAPS, [], f3_own, [])
+        assert it.knowledge_source == "F3", "散文引用でもF3根拠を維持すべき"
+        assert it.evidence == "[F3own#2], [F3own#1]", f"正準形式へ正規化されるべき: {it.evidence}"
+
+    def test_prose_citation_of_irrelevant_record_still_demoted(self):
+        """散文引用でも無関係レコード（費目不一致）なら従来どおり降格（難4安全性）"""
+        from apps.backend.app.agents.reviewer._review_logic import apply_relevance_guard
+        f3_own = [self._f3("03_KT_1G_01_0009_01", fee="放射線管理費")]
+        maps = [{"field_name": "対象費目1", "cell_address": "G6", "value": "処分費"}]
+        it = self._item("メッセージID 03_KT_1G_01_0009_01 を参照")
+        apply_relevance_guard([it], maps, [], f3_own, [])
+        assert it.knowledge_source == "AI知見"
+
+    def test_unresolvable_prose_citation_demoted(self):
+        """どのレコードIDにも一致しない散文引用は従来どおり降格"""
+        from apps.backend.app.agents.reviewer._review_logic import apply_relevance_guard
+        it = self._item("過去事例（詳細不明）による")
+        apply_relevance_guard([it], self._MAPS, [], [self._f3("03_KT_1G_01_0001_01")], [])
+        assert it.knowledge_source == "AI知見"
+
+    def test_bracket_citation_path_unchanged(self):
+        """従来の [F3own#N] 形式はそのまま機能（evidenceも不変）"""
+        from apps.backend.app.agents.reviewer._review_logic import apply_relevance_guard
+        it = self._item("[F3own#1]")
+        apply_relevance_guard([it], self._MAPS, [], [self._f3("03_KT_1G_01_0001_01")], [])
+        assert it.knowledge_source == "F3"
+        assert it.evidence == "[F3own#1]"
+
+    def test_substring_id_collision_prefers_longer_id(self):
+        """IDが部分文字列関係にある場合、長いIDを先に照合して誤解決しない"""
+        from apps.backend.app.agents.reviewer._review_logic import apply_relevance_guard
+        f3_own = [self._f3("03_KT_0001"), self._f3("03_KT_0001_01")]
+        it = self._item("メッセージID 03_KT_0001_01 参照")
+        apply_relevance_guard([it], self._MAPS, [], f3_own, [])
+        assert it.evidence == "[F3own#2]", f"長いID(#2)に解決されるべき: {it.evidence}"
+
+    def test_mixed_prose_and_bracket_normalized(self):
+        """散文とbracketが混在するevidenceも出現順で正準形式に正規化"""
+        from apps.backend.app.agents.reviewer._review_logic import apply_relevance_guard
+        f3_own = [self._f3("03_KT_1G_01_0003_01"), self._f3("03_KT_1G_01_0003_02")]
+        it = self._item("【F3ナレッジ｜メッセージID 03_KT_1G_01_0003_02】 および [F3own#1] を参照")
+        apply_relevance_guard([it], self._MAPS, [], f3_own, [])
+        assert it.knowledge_source == "F3"
+        assert it.evidence == "[F3own#2], [F3own#1]", f"混在引用も正規化: {it.evidence}"
+
+    def test_no_submission_fee_normalizes_but_never_demotes(self):
+        """費目が取れないシート（MRC2等）でも正規化は行い、降格はしない（従来挙動維持）"""
+        from apps.backend.app.agents.reviewer._review_logic import apply_relevance_guard
+        maps_no_fee = [{"field_name": "費用内訳_人件費_数量", "cell_address": "E39", "value": "1"}]
+        f3_own = [self._f3("03_KT_1G_01_0004_01", fee="全く別の費目")]
+        it = self._item("【F3ナレッジ｜メッセージID 03_KT_1G_01_0004_01】")
+        apply_relevance_guard([it], maps_no_fee, [], f3_own, [])
+        assert it.knowledge_source == "F3", "費目不明時は降格しない（従来どおりガードオフ）"
+        assert it.evidence == "[F3own#1]", f"正規化はされる: {it.evidence}"
+
+
+class TestMergeRuleAndGeminiItems:
+    """ルール指摘×Gemini指摘のマージ（F2/F3根拠つきはルールより優先・1セル1指摘）。"""
+
+    def _item(self, cell, src, comment="c"):
+        from apps.backend.app.api.models import ReviewItem
+        return ReviewItem(item_id="", field_name="f", cell_address=cell,
+                          severity="要確認", comment=comment, evidence="", knowledge_source=src)
+
+    def test_grounded_gemini_wins_over_rule_on_same_cell(self):
+        """同一セルではF3根拠つきGemini指摘がルール指摘（必須欄空欄等）に勝つ"""
+        from apps.backend.app.agents.reviewer._review_logic import merge_rule_and_gemini_items
+        rule   = [self._item("G24", "AI知見", "記載必須欄が空欄")]
+        gemini = [self._item("G24", "F3", "過去事例に基づく指摘")]
+        out = merge_rule_and_gemini_items(rule, gemini)
+        assert len(out) == 1 and out[0].knowledge_source == "F3"
+
+    def test_ungrounded_gemini_loses_to_rule_on_same_cell(self):
+        """根拠なし（AI知見）のGemini指摘は従来どおりルール指摘を優先"""
+        from apps.backend.app.agents.reviewer._review_logic import merge_rule_and_gemini_items
+        rule   = [self._item("G24", "AI知見", "記載必須欄が空欄")]
+        gemini = [self._item("G24", "AI知見", "LLMの重複指摘")]
+        out = merge_rule_and_gemini_items(rule, gemini)
+        assert len(out) == 1 and out[0].comment == "記載必須欄が空欄"
+
+    def test_disjoint_cells_all_kept(self):
+        """セルが重ならなければ両方残る（ルール→Geminiの順）"""
+        from apps.backend.app.agents.reviewer._review_logic import merge_rule_and_gemini_items
+        rule   = [self._item("G25", "AI知見")]
+        gemini = [self._item("J30", "F3"), self._item("G23", "AI知見")]
+        out = merge_rule_and_gemini_items(rule, gemini)
+        assert [i.cell_address for i in out] == ["G25", "J30", "G23"]
