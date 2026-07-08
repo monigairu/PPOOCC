@@ -172,7 +172,7 @@ uv run python scripts/preliminary_review/review_annotation.py --excel <結果.xl
 ## 5. 受け入れ基準（2軸×難易度）への到達状況と留意点
 
 事前レビューのPoC受け入れ基準（提案資料の「ナレッジ検索精度／LLMレビュー品質 × 難易度1〜4」）に対する
-**実測ベース**の到達状況。ここでの大前提は「**特定の資料に作り込んで通す（資料依存）のではなく、転記内容に
+**実測ベース**の到達状況。各項目の**判定ロジック・かみ砕き解説・提案資料との乖離一覧は `EVAL_MATRIX.md`**（説明用・随時更新）。ここでの大前提は「**特定の資料に作り込んで通す（資料依存）のではなく、転記内容に
 応じてRAGが一般に機能すること**」。数値は `scripts/preliminary_review/eval_review.py`（`gold_expectations.yaml`）の最新runより。
 
 ### 軸① ナレッジ検索精度
