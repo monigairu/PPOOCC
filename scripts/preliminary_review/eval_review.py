@@ -33,6 +33,40 @@ DEFAULT_EXPECT = Path("data/review_eval/gold_expectations.yaml")
 _LAW_WORDS = ("法令", "条文", "規制", "通達")
 
 
+# ── 実出力の表示（--verbose：判定には影響しない） ──────────────────────────
+def _snip(text, width: int = 60) -> str:
+    s = str(text or "").replace("\n", " ").strip()
+    return s if len(s) <= width else s[:width] + "…"
+
+
+def show_retrieval_hits(hits: list[dict], top_n: int = 5) -> None:
+    """検索ヒットの中身（順位・rerankスコア・費目・炉型・会社・内容）を表示する。"""
+    for rank, h in enumerate(hits[:top_n], 1):
+        score = h.get("_rerank_score")
+        score_s = f"{float(score):.3f}" if score is not None else "  —  "
+        print(
+            f"      {rank}位 score={score_s} 費目={h.get('fee_type', '') or '（なし）'} "
+            f"炉型={h.get('reactor_type', '') or '—'} 会社={h.get('utility_name', '') or '—'} "
+            f"id={h.get('_doc_id', '')}"
+        )
+        print(f"         内容: {_snip(h.get('message_content'))}")
+    if len(hits) > top_n:
+        print(f"      … 他 {len(hits) - top_n} 件")
+
+
+def show_review_items(items: list[dict]) -> None:
+    """レビュー指摘の全件（重要度・セル・根拠種別・指摘文・根拠）を表示する。"""
+    if not items:
+        print("      （指摘なし）")
+    for i, it in enumerate(items, 1):
+        print(
+            f"      指摘{i} [{it.get('severity', '')}] {it.get('field_name', '')} "
+            f"({it.get('cell_address', '')}) 根拠種別={it.get('knowledge_source', '')}"
+        )
+        print(f"         指摘: {_snip(it.get('comment'), 90)}")
+        print(f"         根拠: {_snip(it.get('evidence'), 90)}")
+
+
 # ── 軸① 検索精度 ───────────────────────────────────────────────────────────
 def run_retrieval(case: dict) -> list[dict]:
     tool = case.get("tool", "f3_all")
@@ -134,6 +168,10 @@ def _status(fails: list[str], provisional: bool) -> str:
 def main() -> None:
     parser = argparse.ArgumentParser(description="PoC検証マトリクス ゴールド回帰ランナー")
     parser.add_argument("--expect", default=str(DEFAULT_EXPECT))
+    parser.add_argument(
+        "--verbose", "-v", action="store_true",
+        help="各ケースの実出力（検索ヒットの中身・指摘の全文）を表示する（判定は不変）",
+    )
     args = parser.parse_args()
 
     spec = yaml.safe_load(Path(args.expect).read_text(encoding="utf-8"))
@@ -152,6 +190,8 @@ def main() -> None:
         print(f"  [{st}] 難{case.get('difficulty','?')} {case['name']} — {len(hits)}件")
         for f in fails:
             print(f"      - {f}")
+        if args.verbose:
+            show_retrieval_hits(hits)
         matrix.append(("①検索", case.get("difficulty"), case["name"], st, len(hits)))
 
     print("\n── 軸② LLMレビュー品質 ──")
@@ -164,6 +204,8 @@ def main() -> None:
         print(f"  [{st}] 難{case.get('difficulty','?')} {case['name']} — 指摘{len(items)}件")
         for f in fails:
             print(f"      - {f}")
+        if args.verbose:
+            show_review_items(items)
         matrix.append(("②レビュー", case.get("difficulty"), case["name"], st, len(items)))
 
     print("\n=== マトリクス結果 ===")
