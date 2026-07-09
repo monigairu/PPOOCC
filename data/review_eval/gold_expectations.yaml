@@ -71,6 +71,59 @@ retrieval_cases:
 #     should_flag_any / must_flag: 触れるべき観点
 # ───────────────────────────────────────────────────────────────
 review_cases:
+  # ── 難2（合成）: 無関係な情報が検索に混ざっても正しくレビューできる ──
+  # 費目=解体撤去費（ナレッジ豊富）。検索は他社・他工事・他話題のレコードも返すが、
+  # 本申請に関連する根拠でレビューを生成できること（難1相当の能力も包含して実証）。
+  - name: 難2_合成_無関係情報の混在下で正しくレビュー
+    difficulty: 2
+    provisional: true
+    synthetic_mappings:
+      - {field_name: "電力会社",     cell_address: "C5",  value: "関東電力"}
+      - {field_name: "計画実績区分", cell_address: "C8",  value: "計画"}
+      - {field_name: "炉型",        cell_address: "C7",  value: "BWR"}
+      - {field_name: "工事件名",    cell_address: "C6",  value: "タービン建屋不要配管解体撤去工事"}
+      - {field_name: "対象費目1",    cell_address: "G6",  value: "解体撤去費"}
+      - {field_name: "実施内容",     cell_address: "G22", value: "タービン建屋内の不要配管等の解体撤去を実施する。"}
+    query:
+      fee_type: "解体撤去費"
+      reactor_type: "BWR"
+      utility_name: "関東電力"
+    frame: frameB
+    sheet: MRC1
+    expect:
+      min_items: 1
+      max_items: 7
+      must_have_f3_grounded: true   # ノイズ混在でも関連根拠のレビューが出せる
+      forbid_law_basis: true
+
+  # ── 難3（合成）: 類似するが無関係な情報（近縁費目）が混ざっても選別できる ──
+  # 費目=処分費（希少）。検索は意味の近い「廃棄物処理費」（他社・容器検査の話題）を
+  # 上位に返す（軸①難3で実測済み）。それを根拠にせず、処分費の過去事例のみで
+  # レビューできること（誤った根拠は関連性ガードが降格＝evidence で確認可能）。
+  - name: 難3_合成_近縁費目の混在下で選別してレビュー
+    difficulty: 3
+    provisional: true
+    synthetic_mappings:
+      - {field_name: "電力会社",     cell_address: "C5",  value: "関東電力"}
+      - {field_name: "計画実績区分", cell_address: "C8",  value: "計画"}
+      - {field_name: "炉型",        cell_address: "C7",  value: "BWR"}
+      - {field_name: "工事件名",    cell_address: "C6",  value: "解体撤去工事に伴う廃棄物輸送容器処分"}
+      - {field_name: "対象費目1",    cell_address: "G6",  value: "処分費"}
+      - {field_name: "実施内容",     cell_address: "G22", value: "解体撤去工事で発生した廃棄物を輸送容器により処分する。"}
+    query:
+      fee_type: "処分費"
+      reactor_type: "BWR"
+      utility_name: "関東電力"
+    frame: frameB
+    sheet: MRC1
+    expect:
+      max_items: 7
+      forbid_law_basis: true
+      # 処分費の過去事例（数量根拠の要求等）が実在するため、根拠つき指摘が出せること。
+      # 近縁費目（廃棄物処理費）を引用した場合は関連性ガードが降格するため、
+      # F3根拠として残る指摘は処分費関連のみ＝選別の証跡になる。
+      must_have_f3_grounded: true
+
   - name: 難2/3_MRC1_ノイズ混在下で正しい指摘
     difficulty: 3
     provisional: true
