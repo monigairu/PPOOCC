@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import json
 import sys
 from pathlib import Path
 
@@ -37,6 +38,39 @@ _LAW_WORDS = ("法令", "条文", "規制", "通達")
 def _snip(text, width: int = 60) -> str:
     s = str(text or "").replace("\n", " ").strip()
     return s if len(s) <= width else s[:width] + "…"
+
+
+def show_retrieval_input(case: dict) -> None:
+    """検索ケースの入力（クエリ・フィルタ・件数上限）と合格条件を表示する。"""
+    print(
+        f"      入力: tool={case.get('tool', 'f3_all')} クエリ=「{case.get('query', '')}」"
+        f" 炉型フィルタ={case.get('reactor_type') or '（指定なし）'}"
+        f" 会社フィルタ={case.get('utility') or '（指定なし）'}"
+        f" 取得上限={case.get('limit', 20)}件"
+    )
+    print(f"      合格条件: {json.dumps(case.get('expect', {}), ensure_ascii=False)}")
+
+
+def show_review_input(case: dict, mappings: list[dict], ctx: dict, source: str) -> None:
+    """レビューケースの入力（レビュー対象・検索文脈・転記結果・合格条件）を表示する。
+
+    合成データのケースは転記結果を全件、Excel由来のケースは件数＋先頭抜粋を表示する。
+    """
+    print(f"      入力（レビュー対象）: {source} / {case.get('frame', 'frameB')} / {case.get('sheet', 'MRC1')}")
+    print(
+        f"      検索文脈: 会社={ctx.get('utility_name') or '（不明）'}"
+        f" 費目={ctx.get('fee_type') or '（不明）'}"
+        f" 炉型={ctx.get('reactor_type') or '（不明）'}"
+    )
+    is_synthetic = "synthetic_mappings" in case
+    shown = mappings if is_synthetic else mappings[:8]
+    label = "転記結果（合成・全件）" if is_synthetic else f"転記結果: {len(mappings)}件のセル値。先頭抜粋"
+    print(f"      {label}:")
+    for m in shown:
+        print(f"         {m.get('cell_address', ''):6} {m.get('field_name', '')} = {_snip(m.get('value'), 50)}")
+    if not is_synthetic and len(mappings) > len(shown):
+        print(f"         … 他 {len(mappings) - len(shown)} 件")
+    print(f"      合格条件: {json.dumps(case.get('expect', {}), ensure_ascii=False)}")
 
 
 def show_retrieval_hits(hits: list[dict], top_n: int = 5) -> None:
@@ -98,16 +132,29 @@ def check_retrieval(hits: list[dict], expect: dict) -> list[str]:
 
 
 # ── 軸② レビュー品質 ───────────────────────────────────────────────────────
-def run_review_case(case: dict) -> list[dict]:
+def prepare_review_inputs(case: dict) -> tuple[list[dict], dict, str]:
+    """レビューケースの入力（転記結果mappings・検索文脈・入力元の表記）を組み立てる。
+
+    実行と証跡表示（show_review_input）で同一の入力を使うために分離。
+    """
     frame = case.get("frame", "frameB")
     sheet = case.get("sheet", "MRC1")
     if "synthetic_mappings" in case:
         mappings = [dict(m, reasoning=m.get("reasoning", "")) for m in case["synthetic_mappings"]]
         ctx = case.get("query", {})
+        source = "合成データ（synthetic_mappings・実Excelなし）"
     else:
         excel = Path(case["excel"])
         mappings = reconstruct_mappings_from_excel(excel, frame, sheet)
         ctx = derive_query_context(excel, frame, sheet)
+        source = str(excel)
+    return mappings, ctx, source
+
+
+def run_review_case(case: dict, prepared: tuple[list[dict], dict, str] | None = None) -> list[dict]:
+    frame = case.get("frame", "frameB")
+    sheet = case.get("sheet", "MRC1")
+    mappings, ctx, _ = prepared if prepared is not None else prepare_review_inputs(case)
     utility = ctx.get("utility_name") or "不明電力"
     items, _ = asyncio.run(
         reviewer_agent.run_review(
@@ -172,16 +219,32 @@ def main() -> None:
         "--verbose", "-v", action="store_true",
         help="各ケースの実出力（検索ヒットの中身・指摘の全文）を表示する（判定は不変）",
     )
+    parser.add_argument(
+        "--case",
+        help="ケース名の部分一致で実行対象を絞る（例: --case 難1 / --case MRC2）。証跡を項目単位で取る用途",
+    )
     args = parser.parse_args()
 
     spec = yaml.safe_load(Path(args.expect).read_text(encoding="utf-8"))
     hard_fail = False
     matrix: list[tuple] = []  # (axis, difficulty, name, status, count)
 
+    # --case 指定時はケース名の部分一致で絞る（項目単位の証跡取得用。判定基準は不変）
+    retrieval_cases = spec.get("retrieval_cases", [])
+    review_cases = spec.get("review_cases", [])
+    if args.case:
+        retrieval_cases = [c for c in retrieval_cases if args.case in c["name"]]
+        review_cases = [c for c in review_cases if args.case in c["name"]]
+        if not retrieval_cases and not review_cases:
+            print(f"--case '{args.case}' に一致するケースがありません。定義済みケース:")
+            for c in spec.get("retrieval_cases", []) + spec.get("review_cases", []):
+                print(f"  - {c['name']}")
+            sys.exit(2)
+
     print(f"=== PoC検証マトリクス (version={spec.get('version')}) ===")
 
     print("\n── 軸① ナレッジ検索精度 ──")
-    for case in spec.get("retrieval_cases", []):
+    for case in retrieval_cases:
         hits = run_retrieval(case)
         fails = check_retrieval(hits, case.get("expect", {}))
         prov = case.get("provisional", False)
@@ -191,12 +254,14 @@ def main() -> None:
         for f in fails:
             print(f"      - {f}")
         if args.verbose:
+            show_retrieval_input(case)
             show_retrieval_hits(hits)
         matrix.append(("①検索", case.get("difficulty"), case["name"], st, len(hits)))
 
     print("\n── 軸② LLMレビュー品質 ──")
-    for case in spec.get("review_cases", []):
-        items = run_review_case(case)
+    for case in review_cases:
+        prepared = prepare_review_inputs(case)
+        items = run_review_case(case, prepared)
         fails = check_review(items, case.get("expect", {}))
         prov = case.get("provisional", False)
         st = _status(fails, prov)
@@ -205,6 +270,7 @@ def main() -> None:
         for f in fails:
             print(f"      - {f}")
         if args.verbose:
+            show_review_input(case, prepared[0], prepared[1], prepared[2])
             show_review_items(items)
         matrix.append(("②レビュー", case.get("difficulty"), case["name"], st, len(items)))
 
