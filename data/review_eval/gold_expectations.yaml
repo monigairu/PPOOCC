@@ -74,16 +74,53 @@ review_cases:
   # ── 難2（合成）: 無関係な情報が検索に混ざっても正しくレビューできる ──
   # 費目=解体撤去費（ナレッジ豊富）。検索は他社・他工事・他話題のレコードも返すが、
   # 本申請に関連する根拠でレビューを生成できること（難1相当の能力も包含して実証）。
+  # 記載必須欄（年度・工事件名・実施理由・費用低減策・説明・表の計画費用）は全て埋め、
+  # 空欄のルール指摘が出ない＝指摘がF2/F3照合（RAG）由来になるように作る。
+  # 残す「隙」は過去F3事例が求めた事項（単価積算根拠・一式内訳・低減額の根拠）のみ。
   - name: 難2_合成_無関係情報の混在下で正しくレビュー
     difficulty: 2
     provisional: true
     synthetic_mappings:
+      - {field_name: "年度",        cell_address: "C4",  value: "2026"}
       - {field_name: "電力会社",     cell_address: "C5",  value: "関東電力"}
-      - {field_name: "計画実績区分", cell_address: "C8",  value: "計画"}
+      - {field_name: "工事件名",    cell_address: "C6",  value: "館山1・2号機 タービン建屋不要配管解体撤去工事"}
       - {field_name: "炉型",        cell_address: "C7",  value: "BWR"}
-      - {field_name: "工事件名",    cell_address: "C6",  value: "タービン建屋不要配管解体撤去工事"}
+      - {field_name: "計画実績区分", cell_address: "C8",  value: "計画"}
+      - {field_name: "件名",        cell_address: "G5",  value: "館山1・2号機 タービン建屋不要配管解体撤去工事"}
       - {field_name: "対象費目1",    cell_address: "G6",  value: "解体撤去費"}
-      - {field_name: "実施内容",     cell_address: "G22", value: "タービン建屋内の不要配管等の解体撤去を実施する。"}
+      - {field_name: "発電所名",     cell_address: "G8",  value: "館山発電所"}
+      - {field_name: "炉型",        cell_address: "G9",  value: "BWR"}
+      - {field_name: "工期開始日",   cell_address: "G10", value: "2026年10月"}
+      - {field_name: "工期終了日",   cell_address: "G11", value: "2027年9月"}
+      - {field_name: "対象号炉1",    cell_address: "G14", value: "館山1号機"}
+      - {field_name: "対象号炉2",    cell_address: "G15", value: "館山2号機"}
+      - {field_name: "実施内容",     cell_address: "G22",
+         value: "非管理区域に属するタービン建屋内の不要配管・弁類の機械的解体を実施する。切断・取り出し後に搬出し、仮置きヤードへ運搬する。解体作業は放射線管理区域外で実施するため、一般産業廃棄物として処理する。"}
+      - {field_name: "実施理由",     cell_address: "G23",
+         value: "館山1・2号機は廃止措置計画認可を受け、第1段階（周辺建屋・付帯設備の解体）を推進中である。本工事は廃止措置計画工程に基づき、非管理区域機器を先行して解体することで、後次工程である管理区域内解体作業のための作業空間確保および廃棄物搬出ルートの整備を目的とする。"}
+      - {field_name: "実施費用低減策", cell_address: "G24",
+         value: "複数機器の一括解体により重機稼働率を向上させ、クレーン・搬送車両の待機ロスを削減する。解体片の分別（金属スクラップ/産業廃棄物）を現場で実施し、リサイクル率向上による処分費低減を見込む。"}
+      - {field_name: "説明",        cell_address: "G25",
+         value: "廃炉ワーキンググループ報告対象工事。解体物はすべて非放射性であり、産業廃棄物（金属くず・廃プラスチック）として適正処理する。放射線管理区域への影響なし。"}
+      # 解体機器表（アクティブ2行・必須列=計画_費用まで記載済み）
+      - {field_name: "解体機器表_30_対象年度",  cell_address: "B30", value: "2026"}
+      - {field_name: "解体機器表_30_分類",     cell_address: "C30", value: "配管"}
+      - {field_name: "解体機器表_30_解体機器",  cell_address: "D30", value: "タービン建屋不要配管"}
+      - {field_name: "解体機器表_30_作業区域",  cell_address: "E30", value: "非管理区域"}
+      - {field_name: "解体機器表_30_支払い対象可否", cell_address: "F30", value: "支払い対象"}
+      - {field_name: "解体機器表_30_計画_員数", cell_address: "G30", value: "2"}
+      - {field_name: "解体機器表_30_計画_解体物量", cell_address: "H30", value: "10"}
+      - {field_name: "解体機器表_30_計画_工数", cell_address: "I30", value: "50"}
+      - {field_name: "解体機器表_30_計画_費用", cell_address: "J30", value: "600000"}
+      - {field_name: "解体機器表_31_対象年度",  cell_address: "B31", value: "2026"}
+      - {field_name: "解体機器表_31_分類",     cell_address: "C31", value: "弁"}
+      - {field_name: "解体機器表_31_解体機器",  cell_address: "D31", value: "手動弁類"}
+      - {field_name: "解体機器表_31_作業区域",  cell_address: "E31", value: "非管理区域"}
+      - {field_name: "解体機器表_31_支払い対象可否", cell_address: "F31", value: "支払い対象"}
+      - {field_name: "解体機器表_31_計画_員数", cell_address: "G31", value: "2"}
+      - {field_name: "解体機器表_31_計画_解体物量", cell_address: "H31", value: "5"}
+      - {field_name: "解体機器表_31_計画_工数", cell_address: "I31", value: "30"}
+      - {field_name: "解体機器表_31_計画_費用", cell_address: "J31", value: "250000"}
     query:
       fee_type: "解体撤去費"
       reactor_type: "BWR"
@@ -100,16 +137,32 @@ review_cases:
   # 費目=処分費（希少）。検索は意味の近い「廃棄物処理費」（他社・容器検査の話題）を
   # 上位に返す（軸①難3で実測済み）。それを根拠にせず、処分費の過去事例のみで
   # レビューできること（誤った根拠は関連性ガードが降格＝evidence で確認可能）。
+  # 難2と同様、記載必須欄は全て埋めて空欄指摘を排し、RAG照合の証跡に特化する。
+  # 残す「隙」＝輸送容器の数量と廃棄物発生量の対応根拠（処分費F3事例が過去に要求）。
   - name: 難3_合成_近縁費目の混在下で選別してレビュー
     difficulty: 3
     provisional: true
     synthetic_mappings:
+      - {field_name: "年度",        cell_address: "C4",  value: "2026"}
       - {field_name: "電力会社",     cell_address: "C5",  value: "関東電力"}
-      - {field_name: "計画実績区分", cell_address: "C8",  value: "計画"}
+      - {field_name: "工事件名",    cell_address: "C6",  value: "館山2号機 解体撤去工事に伴う廃棄物輸送容器処分"}
       - {field_name: "炉型",        cell_address: "C7",  value: "BWR"}
-      - {field_name: "工事件名",    cell_address: "C6",  value: "解体撤去工事に伴う廃棄物輸送容器処分"}
+      - {field_name: "計画実績区分", cell_address: "C8",  value: "計画"}
+      - {field_name: "件名",        cell_address: "G5",  value: "館山2号機 解体撤去工事に伴う廃棄物輸送容器処分"}
       - {field_name: "対象費目1",    cell_address: "G6",  value: "処分費"}
-      - {field_name: "実施内容",     cell_address: "G22", value: "解体撤去工事で発生した廃棄物を輸送容器により処分する。"}
+      - {field_name: "発電所名",     cell_address: "G8",  value: "館山発電所"}
+      - {field_name: "炉型",        cell_address: "G9",  value: "BWR"}
+      - {field_name: "工期開始日",   cell_address: "G10", value: "2026年11月"}
+      - {field_name: "工期終了日",   cell_address: "G11", value: "2027年3月"}
+      - {field_name: "対象号炉1",    cell_address: "G14", value: "館山2号機"}
+      - {field_name: "実施内容",     cell_address: "G22",
+         value: "解体撤去工事で発生した非放射性廃棄物を輸送容器に収納し、処分場へ輸送・処分する。輸送容器は20基を使用する予定である。積込・輸送は専門業者に委託し、マニフェストにより処分完了を確認する。"}
+      - {field_name: "実施理由",     cell_address: "G23",
+         value: "解体工事の進捗に伴い発生する廃棄物を滞留なく処分し、仮置きヤードの逼迫による解体工程への影響を回避するため。"}
+      - {field_name: "実施費用低減策", cell_address: "G24",
+         value: "輸送便の集約により運搬回数を削減し、輸送費を低減する。分別済み金属くずは有価物として売却し、処分量自体を圧縮する。"}
+      - {field_name: "説明",        cell_address: "G25",
+         value: "解体物はすべて非放射性であり、産業廃棄物として適正処理する。処分先は許可を有する処分場を選定済み。"}
     query:
       fee_type: "処分費"
       reactor_type: "BWR"
