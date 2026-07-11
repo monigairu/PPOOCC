@@ -157,7 +157,11 @@ def ask(question: str, utility: str, *, top_k: int | None = None) -> AskResult:
   `status: Literal["answered", "abstained"]` / `answer: str | None` /
   `evidences: list[Evidence]` / `grounding_score: float | None` /
   `related: list[Evidence]`（棄却時の近傍ナレッジ・(c)ドラフトでも使用） /
-  `abstain_reason: Literal["insufficient_context", "low_grounding", "gate_error"] | None`
+  `abstain_reason: Literal["insufficient_context", "low_grounding", "gate_error"] | None` /
+  `failed_stage: Literal["sufficiency", "generation", "grounding"] | None`
+  （gate_error 時にどのゲートで落ちたか。評価・閾値較正の分析用）
+  - status⇔フィールドの整合（answered→answer必須／abstained→abstain_reason必須 等）は
+    Pydantic バリデータで強制し、矛盾状態を Firestore に保存させない。
 
 ### 3-2. `sufficiency.py` — ② 十分性判定
 
@@ -223,11 +227,13 @@ def update_status(inquiry_id: str, status: InquiryStatus) -> None
   "status": "answered",
   "answer": "…（引用タグ付き回答文）…",
   "evidences": [
-    { "record_id": "F3-0123", "source_file": "F3_knowledge_関東電力.xlsx",
-      "sheet": "KNI_1G_01", "snippet": "…該当箇所の抜粋…", "score": 0.92 }
+    { "record_id": "03_KT_1G_01_0002", "sheet": "KNI_1G_01",
+      "snippet": "…該当箇所の抜粋…", "score": 0.92,
+      "source_file": "F3_knowledge_関東電力.xlsx",  // 任意（BQ平坦化に原本ファイル名列が無いため導出できる場合のみ）
+      "round": 1, "message_direction": "denryoku" }  // D-9 引用単位（実データ語彙は nuro/denryoku）
   ],
   "grounding_score": 0.87,
-  "related": [], "abstain_reason": null
+  "related": [], "abstain_reason": null, "failed_stage": null
 }
 
 // レスポンス（棄却時）
@@ -235,7 +241,8 @@ def update_status(inquiry_id: str, status: InquiryStatus) -> None
   "status": "abstained",
   "answer": null, "evidences": [], "grounding_score": null,
   "related": [ /* 近傍ナレッジ（Evidence同型）。起票時の参考・(c)ドラフトに転用 */ ],
-  "abstain_reason": "insufficient_context"
+  "abstain_reason": "insufficient_context",
+  "failed_stage": null   // abstain_reason="gate_error" 時のみ ②③④ のどれかを記録（分析用）
 }
 ```
 
@@ -322,3 +329,5 @@ inquiries/{inquiry_id}
 | D-8 | 評価セットは `data/inquiry_eval/qa_cases.yaml`（Step 0 で10問作成・実データ由来） | フェーズ1ミニ評価とフェーズ4ハーネスの共通入力。拡充時も同形式 | 確定 |
 | D-9 | 引用の最小単位は「レコードID＋round＋message_direction」 | F3はBigQuery平坦化で**1行=1メッセージ**（確認/回答×回数）のため、同一IDが複数ヒットする。表示・重複排除はこの単位で行う | 確定 |
 | D-10 | 合成F3（架空電力）の追加は**フェーズ4まで保留** | 現データで検索検証は成立。追加するなら Tool2b（F3他社検索）への混入で事前レビュー検証を汚さない方式（別データストア等）を先に決める | 保留 |
+| D-11 | Evidence の `source_file` は**任意**・`message_direction` の語彙は**実データの `nuro`/`denryoku`**（日本語化は表示層）・record_id は案件ID（メッセージ単位キーは `_doc_id`＝message_id） | Step 1 レビュー（2026-07-11）：BQ平坦化テーブルに原本ファイル名の列が無く、direction の実語彙は excel_reader `_infer_direction` 由来。load_f3 キー→Evidence の対応表は models.py docstring に明記 | 確定 |
+| D-12 | B群評価セットにサブカテゴリ (i)F3全体に無い (ii)自社ヒットするが答えでない (iii)他社F3にはあるが自社に無い、を持たせる（B-6追加・計11問） | REQUIREMENTS §8 の「他社F3にしかない話題を含む」の実装。(iii) が自社フィルタ破損の検出器になる | 確定 |
