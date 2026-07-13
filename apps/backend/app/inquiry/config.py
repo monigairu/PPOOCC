@@ -20,6 +20,9 @@ from apps.backend.app.core.settings import GEMINI_MODEL, _env_float
 # （不正値は import 時 ValueError＝設定ミスに即気づける）。
 INQUIRY_TOP_K = int(os.environ.get("INQUIRY_TOP_K", "10"))
 
+# 棄却時に related として返す近傍ナレッジの最大件数（Evidence 換算・D-9 単位）
+INQUIRY_RELATED_LIMIT = int(os.environ.get("INQUIRY_RELATED_LIMIT", "3"))
+
 # ── ②③ LLM（十分性判定・引用付き回答生成）───────────────────────
 # デフォルトは事前レビューと同一モデル（GEMINI_MODEL）。
 # `or` で空文字セット時（CI/コンテナで起きがち）もフォールバックさせる。

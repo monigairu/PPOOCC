@@ -58,6 +58,15 @@ from apps.backend.app.preliminary_review.config import (
 
 logger = logging.getLogger(__name__)
 
+
+class KnowledgeSearchError(RuntimeError):
+    """Vertex AI Search の検索が実行できなかったことを示す（0件ヒットとは区別）。
+
+    raise_on_error=True の呼び出し（問い合わせ機能）でのみ送出される。
+    事前レビュー側の既定動作（エラー時は空リスト）は変えない。
+    """
+
+
 # ── Vertex AI Search クライアント（遅延初期化・シングルトン）──────────────────
 _search_client: discoveryengine.SearchServiceClient | None = None
 _rank_client: discoveryengine.RankServiceClient | None = None
@@ -152,6 +161,7 @@ def _search(
     query: str,
     filter_str: str = "",
     limit: int = 50,
+    raise_on_error: bool = False,
 ) -> list[dict[str, Any]]:
     """
     Vertex AI Search でハイブリッド検索（BM25+ベクトル）を実行する。
@@ -159,10 +169,20 @@ def _search(
     検索結果を knowledge_loader の共通戻り値形式（list[dict]）に変換して返す。
     query が空の場合は全件スキャン相当のクエリを送る（""は不可のため空白文字を使用）。
 
+    raise_on_error=True の場合、設定不備・検索 API エラーを KnowledgeSearchError として
+    送出する（「検索できなかった」と「0件ヒット」を呼び出し側で区別できるようにする。
+    問い合わせ機能の偽棄却防止・inquiry DESIGN §6/D-14）。デフォルトは従来どおり空リスト。
+    リランク（Ranking API）の失敗は対象外：raise_on_error=True でも _rerank 側の
+    フォールバック（並べ替えスキップ）で検索を継続する（順位劣化≠検索障害・D-14）。
+
     Returns:
         ナレッジ辞書のリスト。content と struct_data を展開したフラット形式。
     """
     if not GCP_PROJECT_ID or not datastore_id:
+        if raise_on_error:
+            raise KnowledgeSearchError(
+                f"GCP設定が不完全です（PROJECT_ID={GCP_PROJECT_ID}, DATASTORE={datastore_id}）"
+            )
         logger.warning("GCP設定が不完全です（PROJECT_ID=%s, DATASTORE=%s）", GCP_PROJECT_ID, datastore_id)
         return []
 
@@ -187,6 +207,8 @@ def _search(
         records = [_to_record(r) for r in response.results]
     except GoogleAPICallError as e:
         logger.error("Vertex AI Search エラー（datastore=%s）: %s", datastore_id, e)
+        if raise_on_error:
+            raise KnowledgeSearchError(f"Vertex AI Search エラー（datastore={datastore_id}）") from e
         return []
 
     # ハイブリッド検索の結果を semantic-ranker で関連度順に並べ替え（§3-2・Step5）
@@ -336,6 +358,7 @@ def load_f3(
     fee_type: str | None = None,
     sheet_name: str | None = None,
     limit: int = 50,
+    raise_on_error: bool = False,
 ) -> list[dict[str, Any]]:
     """
     F3ナレッジ（電力とNuROの問合せ履歴）をVertex AI Searchで検索して返す。
@@ -350,6 +373,8 @@ def load_f3(
         fee_type:      検索クエリ（費目・キーワード）
         sheet_name:    特定スキーマシートのみ検索（Phase 2 では未使用）
         limit:         返す件数の上限
+        raise_on_error: True なら検索障害を KnowledgeSearchError で送出（0件と区別。
+                        問い合わせ機能用・inquiry DESIGN D-14）。既定 False＝従来動作
 
     Returns:
         ナレッジ辞書のリスト
@@ -377,6 +402,7 @@ def load_f3(
         query=fee_type or "",
         filter_str=filter_str,
         limit=fetch_limit,
+        raise_on_error=raise_on_error,
     )
     if reactor_type:
         records = [r for r in records if str(r.get("reactor_type", "")) == reactor_type][:limit]

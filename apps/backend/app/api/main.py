@@ -11,7 +11,7 @@ FastAPI アプリケーション本体
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from apps.backend.app.api.routes import upload, chat, template, review, sessions, transcribe
+from apps.backend.app.api.routes import upload, chat, template, review, sessions, transcribe, inquiry
 from apps.backend.app.core.settings import CORS_ORIGINS
 
 # ── FastAPIアプリの初期化 ──────────────────────
@@ -37,6 +37,7 @@ app.include_router(template.router, prefix="/api", tags=["テンプレート"])
 app.include_router(review.router,   prefix="/api", tags=["レビュー"])
 app.include_router(sessions.router,   prefix="/api", tags=["セッション"])
 app.include_router(transcribe.router, prefix="/api", tags=["N対1転記"])
+app.include_router(inquiry.router,    prefix="/api", tags=["問い合わせ"])
 
 
 # ── ヘルスチェック ─────────────────────────────

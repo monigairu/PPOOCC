@@ -1,6 +1,6 @@
 # 問い合わせナレッジ対応自動化 アーキテクチャ
 
-> **最終更新：2026-07-13**（初版。実装状況＝フェーズ1 Step 1 完了時点：`config.py`・`models.py` 実装済み）
+> **最終更新：2026-07-13**（**フェーズ1完了**：パイプライン①〜④＋`/ask`＋最小UI実装済み・ミニ評価でB群誤答0件）
 
 本書は問い合わせ機能の「**システムがどういう構造か**」の地図（静的構造・再利用境界・データの置き場）。
 処理フロー・関数I/F・APIスキーマの詳細（動的な振る舞い）は [`DESIGN.md`](DESIGN.md) が正本であり、本書では繰り返さない。
@@ -167,15 +167,15 @@ flowchart LR
 
 ## 6. 実装状況マップ（2026-07-13 時点）
 
-フェーズ計画は DESIGN §7。現在は**フェーズ1（コアパイプライン）の途中＝Step 1 完了**。
+フェーズ計画は DESIGN §7。現在は**フェーズ1（コアパイプライン）完了**。次はフェーズ2（起票管理）。
 
 | コンポーネント | 状態 | 備考 |
 |---|---|---|
 | `data/inquiry_eval/qa_cases.yaml` | ✅ 実装済（Step 0） | A群5問＋B群6問（サブカテゴリ付き・D-12） |
 | `inquiry/config.py` | ✅ 実装済（Step 1） | TOP_K / MODEL / GROUNDING_THRESHOLD を env 駆動で集約 |
 | `inquiry/models.py` | ✅ 実装済（Step 1） | AskResult / Evidence 等。status⇔フィールド整合を Pydantic バリデータで強制 |
-| `inquiry/pipeline.py`・`sufficiency.py`・`generation.py`・`grounding.py` | ⬜ フェーズ1 | ③は Answer API 第一候補・引用粒度をフェーズ1で判定（D-2） |
-| `api/routes/inquiry.py`（`/ask`）＋最小UI | ⬜ フェーズ1 | 完了条件：ミニ評価でB群誤答0件 |
+| `inquiry/pipeline.py`・`sufficiency.py`・`generation.py`・`grounding.py` | ✅ 実装済（Step 2） | ③は自前生成＝Answer API 不採用（D-2）・文体は条件平叙文（D-13）・検索障害は KnowledgeSearchError 送出（D-14）。ミニ評価：B群誤答0/6・A群5/5（DESIGN §7） |
+| `api/routes/inquiry.py`（`/ask`）＋最小UI | ✅ 実装済（Step 3） | 棄却=200・検索障害=502（§6）。UIは `/inquiry`（InquiryPage.jsx）＝質問→回答/棄却表示・起票ボタンはフェーズ2まで無効表示。実サーバE2Eで回答・棄却・422を確認 |
 | `inquiry/store.py`＋起票CRUD＋一覧UI | ⬜ フェーズ2 | Firestore `inquiries` |
 | `/draft`＋NuRO向け表示 | ⬜ フェーズ3 | `ask()` 再利用 |
 | `scripts/inquiry/eval_inquiry.py` | ⬜ フェーズ4 | REQUIREMENTS §8 の4指標・閾値較正 |
