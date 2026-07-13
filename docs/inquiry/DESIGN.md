@@ -24,38 +24,55 @@
 
 ```mermaid
 flowchart TB
-    subgraph 電力ユーザー
-        Q[質問を入力] --> ASK
+    subgraph S1["電力ユーザー"]
+        Q[質問を入力]
+    end
+
+    subgraph S2["バックエンド (a) /api/inquiry/ask"]
+        ASK["3段パイプライン<br>§1-2"]
+    end
+
+    subgraph S3["電力ユーザー：自己解決〜起票"]
+        ANS[引用付き回答を確認]
+        ABS["「ナレッジに存在しない」<br>＋起票導線"]
         SELF{自己解決<br>できた?}
-        FILE[起票フォーム<br>質問文プリフィル] --> SUBMIT[問い合わせ登録]
-        VIEW[回答を確認]
+        DONE([終了])
+        FILE[起票フォーム<br>質問文プリフィル]
+        SUBMIT[問い合わせ登録]
     end
 
-    subgraph "バックエンド (a) /api/inquiry/ask"
-        ASK[3段パイプライン<br>§1-2] -->|answered| ANS[引用付き回答を表示]
-        ASK -->|abstained| ABS["「ナレッジに存在しない」<br>＋起票導線"]
-    end
-
-    subgraph "バックエンド (b)(c)"
+    subgraph S4["バックエンド (b)(c)"]
         STORE[(Firestore<br>inquiries)]
         DRAFT["AIドラフト生成<br>= (a)と同一パイプライン"]
     end
 
-    subgraph NuRO担当者
-        LIST[未回答一覧を確認] --> REPLY[ドラフトを参考に<br>回答を登録]
+    subgraph S5["NuRO担当者"]
+        LIST[未回答一覧を確認]
+        REPLY[ドラフトを参考に<br>回答を登録]
     end
 
+    subgraph S6["電力ユーザー：NuRO回答の確認"]
+        VIEW[回答を確認]
+        DONE2([終了])
+    end
+
+    Q --> ASK
+    ASK -->|answered| ANS
+    ASK -->|abstained| ABS
     ANS --> SELF
-    SELF -->|はい| DONE([終了])
+    SELF -->|はい| DONE
     SELF -->|いいえ| FILE
     ABS --> FILE
+    FILE --> SUBMIT
     SUBMIT --> STORE
+    STORE --> DRAFT
     STORE --> LIST
-    STORE --> DRAFT --> LIST
-    REPLY --> STORE
-    STORE --> VIEW
-    VIEW -->|未解決| FILE
-    VIEW -->|解決| DONE2([終了])
+    DRAFT --> LIST
+    LIST --> REPLY
+    REPLY -->|回答を保存| STORE
+    STORE -->|回答| VIEW
+    VIEW -->|解決| DONE2
+    VIEW -->|未解決・追記して再起票| FILE
 ```
 
 ### 1-2. 自己解決パイプライン（コア・`/api/inquiry/ask`）
