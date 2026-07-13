@@ -123,10 +123,7 @@ _FILE_BODY = {
 class TestCreateInquiryEndpoint:
     def test_create_returns_201_with_number(self):
         """起票は 201 で {inquiry_id, number} を返す（DESIGN §4-1）"""
-        with (
-            patch(f"{_STORE}.create_inquiry", return_value="abc123") as create,
-            patch(f"{_STORE}.get_inquiry", return_value=_INQUIRY),
-        ):
+        with patch(f"{_STORE}.create_inquiry", return_value=_INQUIRY) as create:
             body = {**_FILE_BODY, "self_solve_log": _ABSTAINED.model_dump()}
             res = client.post("/api/inquiry", json=body)
         assert res.status_code == 201

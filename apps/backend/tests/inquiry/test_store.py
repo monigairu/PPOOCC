@@ -88,7 +88,7 @@ def fake_db(monkeypatch) -> FakeFirestore:
 def _create(requester: str = "関東電力 太郎", **overrides) -> str:
     params = {"category": "質問", "content": "〇〇タンクは支払い対象でしょうか", "requester": requester}
     params.update(overrides)
-    return store.create_inquiry(InquiryCreate(**params))
+    return store.create_inquiry(InquiryCreate(**params)).inquiry_id
 
 
 _ABSTAINED = AskResult(status="abstained", abstain_reason="insufficient_context")
@@ -106,6 +106,14 @@ class TestCreateInquiry:
         assert saved.requester == "関東電力 太郎"
         assert saved.self_solve_log.abstain_reason == "insufficient_context"
         assert saved.answer is None and saved.ai_draft is None
+
+    def test_create_returns_saved_doc_without_reread(self, fake_db):
+        """返り値は保存済み文書そのもの（番号取得のための再読取をさせない・§3-5）"""
+        created = store.create_inquiry(
+            InquiryCreate(category="質問", content="c", requester="関東電力 太郎")
+        )
+        assert created.number == "0001"
+        assert created == store.get_inquiry(created.inquiry_id)
 
     def test_number_increments_per_creation(self, fake_db):
         """number はカウンタ採番で "0001" から連番（§4-2）"""

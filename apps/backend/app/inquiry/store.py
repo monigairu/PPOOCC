@@ -72,8 +72,12 @@ def _get_in_transaction(doc_ref, transaction) -> dict:
     return snapshot.to_dict()
 
 
-def create_inquiry(inquiry: InquiryCreate) -> str:
-    """採番して保存し、inquiry_id を返す。"""
+def create_inquiry(inquiry: InquiryCreate) -> Inquiry:
+    """採番して保存し、保存済み文書（Inquiry）を返す。
+
+    書込後の再読取をさせないため ID ではなく文書全体を返す（番号取得のための
+    追加読取が失敗すると「保存成功なのに 502」→リトライで重複起票になるため）。
+    """
     counter_ref = (
         get_firestore_client()
         .collection(COUNTER_COLLECTION)
@@ -81,7 +85,7 @@ def create_inquiry(inquiry: InquiryCreate) -> str:
     )
     doc_ref = _collection().document()  # Firestore 自動採番ID
 
-    def _create(transaction) -> str:
+    def _create(transaction) -> Inquiry:
         snapshot = counter_ref.get(transaction=transaction)
         next_count = (snapshot.to_dict() or {}).get("count", 0) + 1
         now = datetime.now(timezone.utc)
@@ -98,11 +102,13 @@ def create_inquiry(inquiry: InquiryCreate) -> str:
         )
         transaction.set(counter_ref, {"count": next_count})
         transaction.set(doc_ref, doc.model_dump())
-        return doc_ref.id
+        return doc
 
-    inquiry_id = _run_in_transaction(_create)
-    logger.info("問い合わせを起票: inquiry_id=%s requester=%s", inquiry_id, inquiry.requester)
-    return inquiry_id
+    created = _run_in_transaction(_create)
+    logger.info(
+        "問い合わせを起票: inquiry_id=%s requester=%s", created.inquiry_id, inquiry.requester
+    )
+    return created
 
 
 def list_inquiries(*, requester: str | None = None) -> list[Inquiry]:

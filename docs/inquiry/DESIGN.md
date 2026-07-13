@@ -230,7 +230,7 @@ def check_grounding(answer: str, records: list[dict]) -> GroundingResult:
 ### 3-5. `store.py` — Firestore
 
 ```python
-def create_inquiry(inquiry: InquiryCreate) -> str            # 採番して保存、inquiry_id を返す
+def create_inquiry(inquiry: InquiryCreate) -> Inquiry        # 採番して保存、保存済み文書を返す（書込後の再読取をさせない）
 def list_inquiries(*, requester: str | None = None) -> list[Inquiry]   # 電力=自分の分/NuRO=全件
 def get_inquiry(inquiry_id: str) -> Inquiry                  # 無ければ InquiryNotFoundError
 def save_answer(inquiry_id: str, answer: AnswerCreate) -> None          # status: open→answered

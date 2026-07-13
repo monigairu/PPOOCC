@@ -9,14 +9,9 @@
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { listInquiries } from "./api.js";
-import { C, ErrorCard, InquiryShell, Spinner, StatusBadge, useIdentity } from "./shared.jsx";
-
-function formatTimestamp(iso) {
-  if (!iso) return "";
-  return new Date(iso).toLocaleString("ja-JP", {
-    year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit",
-  });
-}
+import {
+  C, ErrorCard, InquiryShell, Spinner, StatusBadge, formatTimestamp, useIdentity,
+} from "./shared.jsx";
 
 export default function InquiryListPage() {
   const navigate = useNavigate();
@@ -26,8 +21,12 @@ export default function InquiryListPage() {
 
   const isDenryoku = identity.role === "denryoku";
   const requesterFilter = isDenryoku ? identity.displayName.trim() : null;
+  // 電力ロールで表示名が空のまま取得すると「全件」が自分の分として見えてしまうため
+  // （requester 未指定=NuRO向け全件・§4-1）、入力されるまで取得しない
+  const needsDisplayName = isDenryoku && !requesterFilter;
 
   useEffect(() => {
+    if (needsDisplayName) return;
     let cancelled = false;
     setInquiries(null);
     setError(null);
@@ -35,7 +34,7 @@ export default function InquiryListPage() {
       .then((list) => { if (!cancelled) setInquiries(list); })
       .catch((e) => { if (!cancelled) setError(e.message); });
     return () => { cancelled = true; };
-  }, [requesterFilter]);
+  }, [requesterFilter, needsDisplayName]);
 
   const openCount = inquiries?.filter((inq) => inq.status === "open").length ?? 0;
 
@@ -59,7 +58,17 @@ export default function InquiryListPage() {
 
       {error && <ErrorCard message={error} />}
 
-      {!error && inquiries === null && (
+      {needsDisplayName && (
+        <div style={{
+          padding: "16px", borderRadius: "10px",
+          background: C.warningSoft, border: `1px solid ${C.warning}`,
+          fontSize: "12.5px", color: C.warning, lineHeight: 1.8,
+        }}>
+          右上の「表示名」を入力すると、自分が起票した問い合わせが表示されます。
+        </div>
+      )}
+
+      {!error && !needsDisplayName && inquiries === null && (
         <div style={{ display: "flex", alignItems: "center", gap: "10px", color: C.textMuted, fontSize: "12px" }}>
           <Spinner />読み込み中...
         </div>

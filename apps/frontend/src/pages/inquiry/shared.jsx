@@ -56,6 +56,14 @@ export const STATUS_INFO = {
   resolved: { label: "解決", color: C.success, soft: C.successSoft },
 };
 
+/** ISO文字列 → "2026/07/13 23:49" 形式（一覧・詳細で共用） */
+export function formatTimestamp(iso) {
+  if (!iso) return "";
+  return new Date(iso).toLocaleString("ja-JP", {
+    year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit",
+  });
+}
+
 export function Spinner({ size = 14 }) {
   return (
     <span style={{
@@ -157,10 +165,22 @@ export function EvidenceCard({ ev, num, highlighted, onHover, cardRef }) {
 const IDENTITY_KEY = "nuro.inquiry.identity";
 const DEFAULT_IDENTITY = { role: "denryoku", utility: "関東電力", displayName: "関東電力 担当者" };
 
+// localStorage は外部から書き換わり得るため、型が合うキーだけ採用する
+// （null 等が混ざると identity.utility.trim() で描画クラッシュするのを防ぐ）
+function sanitizeIdentity(stored) {
+  const identity = { ...DEFAULT_IDENTITY };
+  if (stored && typeof stored === "object") {
+    if (stored.role === "denryoku" || stored.role === "nuro") identity.role = stored.role;
+    if (typeof stored.utility === "string") identity.utility = stored.utility;
+    if (typeof stored.displayName === "string") identity.displayName = stored.displayName;
+  }
+  return identity;
+}
+
 export function useIdentity() {
   const [identity, setIdentity] = useState(() => {
     try {
-      return { ...DEFAULT_IDENTITY, ...JSON.parse(localStorage.getItem(IDENTITY_KEY) || "{}") };
+      return sanitizeIdentity(JSON.parse(localStorage.getItem(IDENTITY_KEY) || "{}"));
     } catch {
       return DEFAULT_IDENTITY;
     }

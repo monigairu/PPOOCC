@@ -92,9 +92,8 @@ def ask_inquiry(request: AskRequest) -> AskResult:
 def create_inquiry(request: InquiryCreate) -> InquiryCreated:
     """起票する。棄却→起票導線では self_solve_log（直前の AskResult）を添付する（§4-2）。"""
     with _map_store_errors():
-        inquiry_id = store.create_inquiry(request)
-        saved = store.get_inquiry(inquiry_id)
-    return InquiryCreated(inquiry_id=inquiry_id, number=saved.number)
+        saved = store.create_inquiry(request)
+    return InquiryCreated(inquiry_id=saved.inquiry_id, number=saved.number)
 
 
 @router.get("/inquiry", response_model=list[Inquiry])

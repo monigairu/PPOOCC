@@ -12,15 +12,9 @@ import { useCallback, useEffect, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { getInquiry, submitAnswer, updateStatus } from "./api.js";
 import {
-  ABSTAIN_INFO, C, ErrorCard, EvidenceCard, InquiryShell, Spinner, StatusBadge, useIdentity,
+  ABSTAIN_INFO, C, ErrorCard, EvidenceCard, InquiryShell, Spinner, StatusBadge,
+  formatTimestamp, useIdentity,
 } from "./shared.jsx";
-
-function formatTimestamp(iso) {
-  if (!iso) return "";
-  return new Date(iso).toLocaleString("ja-JP", {
-    year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit",
-  });
-}
 
 function SectionCard({ title, accent = C.border, children }) {
   return (
