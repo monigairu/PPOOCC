@@ -126,7 +126,8 @@ export function AppHeader({ rightSlot }) {
 
       <div style={{ display: "flex", gap: "4px", marginLeft: "12px" }}>
         {tabs.map(({ path, label }) => {
-          const isActive = currentPath === path;
+          // "/inquiry" は配下ページ（/inquiry/tickets 等）でもアクティブ表示
+          const isActive = path === "/" ? currentPath === "/" : currentPath.startsWith(path);
           return (
             <button
               key={path}

@@ -28,6 +28,12 @@ INQUIRY_RELATED_LIMIT = int(os.environ.get("INQUIRY_RELATED_LIMIT", "3"))
 # `or` で空文字セット時（CI/コンテナで起きがち）もフォールバックさせる。
 INQUIRY_MODEL = os.environ.get("INQUIRY_MODEL") or GEMINI_MODEL
 
+# ── (b) 起票管理（store.py）──────────────────────────────────────
+# Firestore コレクション名。E2E検証等で本体データと分けたい場合に env で切替可能
+INQUIRY_FIRESTORE_COLLECTION = (
+    os.environ.get("INQUIRY_FIRESTORE_COLLECTION") or "inquiries"
+)
+
 # ── ④ 接地検査ゲート ─────────────────────────────────────────────
 # Check Grounding API のスコアがこの値未満なら棄却に倒す（誤答より棄却）。
 # 0.6 は仮値。フェーズ4の評価ハーネスで較正する（DESIGN §5・§7）。
