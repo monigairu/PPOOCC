@@ -114,8 +114,9 @@ export function AppHeader({ rightSlot }) {
   const currentPath = location.pathname;
 
   const tabs = [
-    { path: "/",       label: "様式自動作成①" },
-    { path: "/review", label: "事前レビュー" },
+    { path: "/",        label: "様式自動作成①" },
+    { path: "/review",  label: "事前レビュー" },
+    { path: "/inquiry", label: "問い合わせ" },
   ];
 
   return (
