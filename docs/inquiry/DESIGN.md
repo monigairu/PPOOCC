@@ -38,7 +38,7 @@ flowchart TB
 
     subgraph "バックエンド (b)(c)"
         STORE[(Firestore<br>inquiries)]
-        DRAFT[AIドラフト生成<br>= (a)と同一パイプライン]
+        DRAFT["AIドラフト生成<br>= (a)と同一パイプライン"]
     end
 
     subgraph NuRO担当者
