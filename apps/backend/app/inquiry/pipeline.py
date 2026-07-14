@@ -14,6 +14,8 @@ from functools import lru_cache
 
 from apps.backend.app.config.paths import KNOWLEDGE_ROOT
 from apps.backend.app.inquiry.config import (
+    INQUIRY_EXPAND_CASE_CONTEXT,
+    INQUIRY_EXPAND_MAX_CASES,
     INQUIRY_GROUNDING_THRESHOLD,
     INQUIRY_RELATED_LIMIT,
     INQUIRY_TOP_K,
@@ -52,6 +54,10 @@ def ask(question: str, utility: str, *, top_k: int | None = None) -> AskResult:
     if not records:
         logger.info("検索0件のため即棄却: %r", question)
         return _abstain("insufficient_context", related=[])
+
+    # D-19: ヒットした案件の往復メッセージ（確認・回答の対）を補完し②③の材料を完全にする
+    if INQUIRY_EXPAND_CASE_CONTEXT:
+        records = _expand_case_context(records, utility)
 
     def related() -> list[Evidence]:
         """棄却時のみ使う近傍ナレッジ。answered 経路で無駄な構築をしない。"""
@@ -107,6 +113,51 @@ def ask(question: str, utility: str, *, top_k: int | None = None) -> AskResult:
         evidences=evidences,
         grounding_score=grounding.score,
     )
+
+
+def _expand_case_context(records: list[dict], utility: str) -> list[dict]:
+    """同一案件の往復メッセージを補完取得する（small-to-big retrieval・D-19）。
+
+    F3は1行=1メッセージ（D-9）のため、①の検索が会話の片側（NuRO確認のみ等）
+    しか返さないことがある。ヒット上位の案件IDをクエリに再検索し、同一案件の
+    全メッセージ（確認・回答の対）を検索結果の末尾に加える。
+    - 末尾追加＝元の順位は不変（related の先頭スライスにも影響しない）。
+    - 補完は品質向上のベストエフォート：失敗しても検索本体の結果で続行する
+      （①本体の障害=502 とは扱いを分ける。D-14 のリランク失敗と同じ境界の考え方）。
+    """
+    seen_docs = {r.get("_doc_id") for r in records}
+    case_ids: list[str] = []
+    for r in records:
+        case_id = str(r.get("id", ""))
+        if case_id and case_id not in case_ids:
+            case_ids.append(case_id)
+        if len(case_ids) >= INQUIRY_EXPAND_MAX_CASES:
+            break
+
+    expanded = list(records)
+    for case_id in case_ids:
+        try:
+            hits = load_f3(
+                caller_role="電力",
+                utility_name=utility,
+                fee_type=case_id,
+                limit=INQUIRY_TOP_K,
+            )
+        except Exception:
+            logger.warning("案件 %s の文脈補完に失敗（検索結果のみで続行）", case_id, exc_info=True)
+            continue
+        for h in hits:
+            # 案件IDクエリはハイブリッド検索のため他案件も混ざる→同一案件のみ採用
+            if str(h.get("id", "")) != case_id or h.get("_doc_id") in seen_docs:
+                continue
+            seen_docs.add(h.get("_doc_id"))
+            # IDクエリ由来のスコアは元クエリと比較不能のため落とす（表示の誤解防止）
+            expanded.append(dict(h, _rerank_score=None))
+    if len(expanded) > len(records):
+        logger.info(
+            "文脈補完: %d→%d件（対象案件 %s）", len(records), len(expanded), case_ids
+        )
+    return expanded
 
 
 def _abstain(

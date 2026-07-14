@@ -174,3 +174,90 @@ class TestSearchError:
         monkeypatch.setattr(pipeline, "load_f3", boom)
         with pytest.raises(KnowledgeSearchError):
             pipeline.ask("q", "関東電力")
+
+
+class TestCaseContextExpansion:
+    """D-19: 同一案件の往復メッセージ補完（small-to-big retrieval）。"""
+
+    def test_missing_direction_is_completed(self, patch_stages, monkeypatch):
+        """①が会話の片側しか返さなくても、補完で往復が②③に渡る（A-4型のヒット片側問題）"""
+        first = _record(record_id="03_KT_1G_02_0001", seq=1, direction="nuro",
+                        content="実績の人件費が計画比15%超過。超過理由と工数差異の説明を求める。")
+        sibling = _record(record_id="03_KT_1G_02_0001", seq=2, direction="denryoku",
+                          content="想定外の汚染拡大で除染工程が増加。差異説明書を提出します。")
+        other = _record(record_id="03_KT_9G_9999", seq=1)  # IDクエリに混ざる他案件
+
+        def fake_load_f3(**kw):
+            # ①本体は片側のみ・補完（fee_type=案件ID）は往復＋他案件を返す
+            if kw.get("fee_type") == "03_KT_1G_02_0001":
+                return [first, sibling, other]
+            return [first]
+        monkeypatch.setattr(pipeline, "load_f3", fake_load_f3)
+
+        seen: dict = {}
+        def spy_sufficiency(q, records):
+            seen["records"] = records
+            return SufficiencyResult(
+                sufficient=True, usable_record_ids=["03_KT_1G_02_0001"], reason=""
+            )
+        monkeypatch.setattr(pipeline, "check_sufficiency", spy_sufficiency)
+        monkeypatch.setattr(
+            pipeline, "generate_answer",
+            lambda q, r: GeneratedAnswer(
+                answer="超過理由と工数差異の説明（差異説明書）が必要です [F3#03_KT_1G_02_0001]",
+                cited_record_ids=["03_KT_1G_02_0001"],
+            ),
+        )
+
+        result = pipeline.ask("実績の人件費が計画を15%超過した場合の説明資料は？", "関東電力")
+        # ②には往復が揃って渡り、他案件のメッセージは混入しない
+        assert [r["_doc_id"] for r in seen["records"]] == [
+            "03_KT_1G_02_0001_01", "03_KT_1G_02_0001_02",
+        ]
+        assert result.status == "answered"
+        # 補完されたメッセージも引用根拠になる（往復の両方）
+        assert [e.citation_key for e in result.evidences] == [
+            ("03_KT_1G_02_0001", 1, "nuro"),
+            ("03_KT_1G_02_0001", 1, "denryoku"),
+        ]
+
+    def test_dedupe_and_score_dropped(self, monkeypatch):
+        """元ヒットは順位・スコア不変。補完分は末尾追加でIDクエリ由来スコアを落とす"""
+        base = _record(seq=1, direction="nuro")
+        sibling = _record(seq=2, direction="denryoku")
+        monkeypatch.setattr(pipeline, "load_f3", lambda **kw: [base, sibling])
+        out = pipeline._expand_case_context([base], "関東電力")
+        assert [r["_doc_id"] for r in out] == [base["_doc_id"], sibling["_doc_id"]]
+        assert out[0]["_rerank_score"] == 0.9   # 元ヒットのスコアは保持
+        assert out[1]["_rerank_score"] is None  # 比較不能なスコアは表示しない
+
+    def test_expansion_failure_continues(self, monkeypatch):
+        """補完の検索失敗はベストエフォート＝本体の検索結果のみで続行（502にしない）"""
+        base = _record()
+        def boom(**kw):
+            raise KnowledgeSearchError("Vertex AI Search エラー")
+        monkeypatch.setattr(pipeline, "load_f3", boom)
+        assert pipeline._expand_case_context([base], "関東電力") == [base]
+
+    def test_disabled_by_config(self, patch_stages, monkeypatch):
+        """INQUIRY_EXPAND_CASE_CONTEXT=0 相当で追加検索なし（前後比較・切り戻し用）"""
+        monkeypatch.setattr(pipeline, "INQUIRY_EXPAND_CASE_CONTEXT", False)
+        calls: list = []
+        def counting(**kw):
+            calls.append(kw)
+            return [_record()]
+        monkeypatch.setattr(pipeline, "load_f3", counting)
+        pipeline.ask("q", "関東電力")
+        assert len(calls) == 1  # ①本体の1回のみ
+
+    def test_max_cases_cap(self, monkeypatch):
+        """補完対象は検索上位 INQUIRY_EXPAND_MAX_CASES 案件まで（コール数の上限）"""
+        records = [_record(record_id=f"03_KT_{i:04d}", seq=1) for i in range(5)]
+        queried: list = []
+        def counting(**kw):
+            queried.append(kw.get("fee_type"))
+            return []
+        monkeypatch.setattr(pipeline, "load_f3", counting)
+        monkeypatch.setattr(pipeline, "INQUIRY_EXPAND_MAX_CASES", 2)
+        pipeline._expand_case_context(records, "関東電力")
+        assert queried == ["03_KT_0000", "03_KT_0001"]

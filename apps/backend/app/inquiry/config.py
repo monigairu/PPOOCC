@@ -23,6 +23,15 @@ INQUIRY_TOP_K = int(os.environ.get("INQUIRY_TOP_K", "10"))
 # 棄却時に related として返す近傍ナレッジの最大件数（Evidence 換算・D-9 単位）
 INQUIRY_RELATED_LIMIT = int(os.environ.get("INQUIRY_RELATED_LIMIT", "3"))
 
+# ── ① 検索の文脈補完（同一案件の往復メッセージ・D-19）────────────
+# F3は1行=1メッセージ（D-9）のため、検索が会話の片側（NuRO確認のみ等）しか
+# 返さないことがある。ヒットした案件の全メッセージを補完取得して②③の判定材料を
+# 完全にする（small-to-big retrieval）。"0" で無効（前後比較・切り戻し用）。
+INQUIRY_EXPAND_CASE_CONTEXT = os.environ.get("INQUIRY_EXPAND_CASE_CONTEXT", "1") != "0"
+
+# 補完取得の対象とする案件数の上限（検索上位から。追加の検索コールがこの数だけ増える）
+INQUIRY_EXPAND_MAX_CASES = int(os.environ.get("INQUIRY_EXPAND_MAX_CASES", "3"))
+
 # ── ②③ LLM（十分性判定・引用付き回答生成）───────────────────────
 # デフォルトは事前レビューと同一モデル（GEMINI_MODEL）。
 # `or` で空文字セット時（CI/コンテナで起きがち）もフォールバックさせる。
