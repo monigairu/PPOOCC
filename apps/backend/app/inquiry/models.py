@@ -139,16 +139,31 @@ class AskResult(BaseModel):
 
 class InquiryCreate(BaseModel):
     """起票リクエスト（POST /api/inquiry）。number・status はサーバ側で採番/設定。"""
-    category: str
-    content: str
-    requester: str
+    category: str = Field(min_length=1)   # PoCは自由入力（例: "質問"・§4-2）
+    content: str = Field(min_length=1)
+    requester: str = Field(min_length=1)
     self_solve_log: AskResult | None = None  # 起票直前のRAG応答（評価・将来(d)の入力）
+
+
+class InquiryCreated(BaseModel):
+    """起票レスポンス（POST /api/inquiry → 201・DESIGN §4-1）。"""
+    inquiry_id: str
+    number: str
+
+
+class StatusUpdate(BaseModel):
+    """状態更新リクエスト（PATCH /api/inquiry/{id}/status・DESIGN §4-1／D-15）。
+
+    電力側遷移（answered→resolved／answered→open）専用のため "answered" は受けない
+    （open→answered は /answer のみ）。遷移可否の検証本体は store.update_status。
+    """
+    status: Literal["resolved", "open"]
 
 
 class AnswerCreate(BaseModel):
     """NuRO回答の登録リクエスト（POST /api/inquiry/{id}/answer）。"""
-    content: str
-    answered_by: str
+    content: str = Field(min_length=1)
+    answered_by: str = Field(min_length=1)
 
 
 class InquiryAnswer(BaseModel):

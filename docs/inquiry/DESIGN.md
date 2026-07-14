@@ -143,9 +143,13 @@ apps/backend/app/
 ├ api/routes/
 │ └ inquiry.py                  # ★新設。エンドポイント（§4-1）。main.py に include_router 追加
 apps/frontend/src/
-├ pages/
-│ └ InquiryPage.jsx             # ★新設。質問入力・回答/棄却表示・起票・一覧
-└ App.jsx                       # タブ追加 { path: "/inquiry", label: "問い合わせ" }
+├ pages/inquiry/                # ★フェーズ2で pages/InquiryPage.jsx をディレクトリに再編（1画面→3画面のため）
+│ ├ api.js                      # /api/inquiry の fetch ラッパ（エンドポイント・エラー整形の一元管理）
+│ ├ shared.jsx                  # 共通部品（カラートークン・EvidenceCard・簡易ユーザー識別 useIdentity・共通レイアウト）
+│ ├ InquiryPage.jsx             # /inquiry：質問入力・回答/棄却表示・起票フォーム（フェーズ1UIを移設）
+│ ├ InquiryListPage.jsx         # /inquiry/tickets：問い合わせ一覧（電力=自分の分／NuRO=全件）
+│ └ InquiryDetailPage.jsx       # /inquiry/tickets/:id：詳細・NuRO回答登録・解決/差し戻し
+└ App.jsx                       # タブ追加 { path: "/inquiry", label: "問い合わせ" }（配下パスもアクティブ表示）
 scripts/inquiry/                # ★新設（運用スクリプト。preliminary_review/ と並列）
 └ eval_inquiry.py               # A/B群評価ハーネス（REQUIREMENTS §8。フェーズ4）
 data/inquiry_eval/
@@ -226,13 +230,20 @@ def check_grounding(answer: str, records: list[dict]) -> GroundingResult:
 ### 3-5. `store.py` — Firestore
 
 ```python
-def create_inquiry(inquiry: InquiryCreate) -> str            # 採番して保存、inquiry_id を返す
+def create_inquiry(inquiry: InquiryCreate) -> Inquiry        # 採番して保存、保存済み文書を返す（書込後の再読取をさせない）
 def list_inquiries(*, requester: str | None = None) -> list[Inquiry]   # 電力=自分の分/NuRO=全件
-def get_inquiry(inquiry_id: str) -> Inquiry
+def get_inquiry(inquiry_id: str) -> Inquiry                  # 無ければ InquiryNotFoundError
 def save_answer(inquiry_id: str, answer: AnswerCreate) -> None          # status: open→answered
 def save_draft(inquiry_id: str, draft: AskResult) -> None
-def update_status(inquiry_id: str, status: InquiryStatus) -> None
+def update_status(inquiry_id: str, status: InquiryStatus) -> None       # §1-3 外の遷移は InvalidTransitionError
 ```
+
+- **状態遷移の検証は store.py に置く**（ルート層でなく）：§1-3 に無い遷移は
+  `InvalidTransitionError` を送出し、ルート層が 409 に変換する。フェーズ3の `/draft` や
+  将来の呼び出し元が増えても遷移ルールが一箇所に留まる（D-15）。
+- コレクション名は `config.py` の `INQUIRY_FIRESTORE_COLLECTION`（デフォルト `inquiries`）。
+  採番カウンタは同コレクション外の `inquiry_counters/{collection名}` に置き、
+  トランザクションでインクリメントする（一覧クエリにカウンタ文書が混ざらない）。
 
 ---
 
@@ -270,9 +281,14 @@ def update_status(inquiry_id: str, status: InquiryStatus) -> None
 }
 ```
 
-**POST `/api/inquiry`**：`{ category, content, requester }` → `{ inquiry_id, number }`
-**GET `/api/inquiry`**：`?requester=` で絞り込み → `Inquiry[]`
-**POST `/api/inquiry/{id}/answer`**：`{ content, answered_by }` → `204`
+**POST `/api/inquiry`**：`{ category, content, requester, self_solve_log? }` → `201 { inquiry_id, number }`
+（`self_solve_log` は起票直前の `AskResult`。棄却→起票導線で自動添付・§4-2）
+**GET `/api/inquiry`**：`?requester=` で絞り込み → `Inquiry[]`（`updated_at` 降順）
+**GET `/api/inquiry/{id}`**：詳細1件 → `Inquiry`（無ければ `404`）
+**POST `/api/inquiry/{id}/answer`**：`{ content, answered_by }` → `204`（`open`→`answered`。それ以外の状態は `409`）
+**PATCH `/api/inquiry/{id}/status`**：`{ "status": "resolved" | "open" }` → `204`
+（§1-3 の電力側遷移専用：`answered`→`resolved`＝解決確認／`answered`→`open`＝差し戻し。
+　それ以外の遷移は `409`。`open`→`answered` は `/answer` のみが行う＝回答なしの answered を作らせない）
 **POST `/api/inquiry/{id}/draft`**：body なし（保存済み content で `ask()` 再実行）→ `AskResult`
 
 ### 4-2. Firestore スキーマ（REQUIREMENTS §6 の「案」の確定版）
@@ -347,6 +363,15 @@ inquiries/{inquiry_id}
   実サーバE2Eで回答（A-1・接地0.90）・棄却（B-1）・バリデーション422を確認。
   棄却時UIの起票ボタンはフェーズ2まで無効表示（プリフィル内容のプレビューのみ）。
 
+**フェーズ2（起票管理）完了記録（2026-07-13）**：
+- `store.py`＋起票管理エンドポイント5本（§4-1）＋UI3画面（§2 の `pages/inquiry/` 再編）を実装。
+- テスト：`test_store.py` 14件（採番・遷移・不存在）／`test_routes.py` 拡張（404/409/422/502 変換）。
+  inquiry 計66件パス・全体回帰は既存の転記側17件失敗のみ（inquiry/事前レビューに影響なし）。
+- 実サーバE2E（`INQUIRY_FIRESTORE_COLLECTION=inquiries_e2e` で本体データと分離・検証後削除）：
+  - API一巡：起票(201/No.0001)→open時resolve=409→回答(204)→再回答=409→差し戻し(204)→再回答(204)→解決(204)→404。
+  - **UI一巡（完了条件充足）**：質問（B群・棄却）→起票フォーム（プリフィル＋self_solve_log添付）→
+    起票(No.0002)→NuROロールで一覧（未回答1件）→詳細で回答登録→電力ロールで解決確認→resolved。
+
 ---
 
 ## 8. 設計判断の記録
@@ -367,3 +392,5 @@ inquiries/{inquiry_id}
 | D-12 | B群評価セットにサブカテゴリ (i)F3全体に無い (ii)自社ヒットするが答えでない (iii)他社F3にはあるが自社に無い、を持たせる（B-6追加・計11問） | REQUIREMENTS §8 の「他社F3にしかない話題を含む」の実装。(iii) が自社フィルタ破損の検出器になる | 確定 |
 | D-13 | ③の回答は1文目を**条件平叙文（直接回答型）**「〜の場合、〜が必要です」で生成し、④に渡す際は evidence タグを除去する | Check Grounding API の実測（2026-07-13）：文単位で検査要否（`grounding_check_required`）が分類され、検査対象の主張が無いと support_score=0。同一根拠でも「〜した場合、〜が必要です」= 0.98、「〜と記録されています」等のメタ言及・過去事象の再叙述・指示形の例示 = 検査対象外→0。当初の「事実報告型」案はミニ評価でA群3/5が誤棄却となり本形に修正（A群5/5に回復） | 確定 |
 | D-14 | `load_f3`／`_search` に `raise_on_error: bool = False` を追加し、inquiry からは `True` で呼ぶ（`KnowledgeSearchError` を送出）。**リランク（Ranking API）失敗は対象外**＝`raise_on_error=True` でも並べ替えスキップで検索は継続する（意図的な境界：順位劣化は「検索できなかった」ではない） | §6 の「①検索失敗=502」の実装手段。既存実装は API エラー時に空リストを返すため、そのままでは検索障害が D-7 の0件ショートカットに吸われ**偽の棄却**になる。デフォルト付きオプション引数の追加は REQUIREMENTS §0-5 の許容範囲（既定動作は不変＝事前レビュー側に影響なし） | 確定 |
+| D-15 | 状態遷移は `PATCH /{id}/status` を新設し**電力側遷移（answered→resolved／answered→open）専用**とする。open→answered は `/answer` のみ。遷移検証は store.py に集約し、違反は 409 | §1-3 の一巡（起票→回答→解決）に遷移APIが必要だが、§4-1 初版に未定義だった（フェーズ2着手時に発見・2026-07-13）。「回答なしの answered」等の矛盾状態を API 経由で作れないことをサーバ側で保証する | 確定 |
+| D-16 | フロントは `pages/inquiry/` に再編（`api.js`＋3ページ構成・§2）。ロールは PoC では画面上の「電力／NuRO」トグル＋表示名の自由入力で代替（認証は作らない） | フェーズ2で1画面→3画面（質問・一覧・詳細）になり、既存の1ファイル大画面方式（ReviewPage=1200行超）を踏襲すると保守困難。認証・ユーザー識別は REQUIREMENTS §9-2 で未確定のため、既存プラットフォーム同等の簡易運用に留め、本番移行時に `get_current_user` へ差し替える前提（routes/inquiry.py の docstring に明記済み） | 確定 |

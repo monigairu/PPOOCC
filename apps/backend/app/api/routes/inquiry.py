@@ -1,23 +1,42 @@
 """問い合わせナレッジ対応エンドポイント（docs/inquiry/DESIGN.md §4-1）
 
-POST /api/inquiry/ask - (a) 質問→3段パイプライン→引用付き回答 or 棄却
-
-起票管理（POST/GET /api/inquiry ほか）はフェーズ2、AIドラフト（/draft）はフェーズ3。
+(a) 自己解決:
+    POST /api/inquiry/ask                - 質問→3段パイプライン→引用付き回答 or 棄却
+(b) 起票管理（フェーズ2）:
+    POST  /api/inquiry                   - 起票（棄却時の self_solve_log を添付可）
+    GET   /api/inquiry?requester=        - 一覧（電力=自分の分／NuRO=全件）
+    GET   /api/inquiry/{id}              - 詳細
+    POST  /api/inquiry/{id}/answer       - NuRO回答登録（open→answered）
+    PATCH /api/inquiry/{id}/status       - 電力側遷移（answered→resolved／answered→open・D-15）
+(c) AIドラフト（/draft）はフェーズ3。
 
 エラー方針（DESIGN §6）：
     棄却（abstained）は正常系＝200 で返し、起票導線に流す。
     ①検索の障害（KnowledgeSearchError）は 502＝「ナレッジなし」と誤認させない
     （偽の棄却は評価指標と起票品質を汚す）。②③④の障害は pipeline 内で棄却に倒す。
+    Firestore 障害も 502（起票消失を隠さない）。存在しないID=404・遷移違反=409 は
+    store.py の例外を _map_store_errors で変換する。
 
 PoC の認証方針：
-    utility はリクエストで受け取る（既存プラットフォームと同等の簡易運用・REQUIREMENTS §9-2）。
-    本番移行時は user=Depends(get_current_user) から取得に差し替える。
+    utility / requester はリクエストで受け取る（既存プラットフォームと同等の簡易運用・
+    REQUIREMENTS §9-2）。本番移行時は user=Depends(get_current_user) から取得に差し替える。
 """
 import logging
+from contextlib import contextmanager
 
 from fastapi import APIRouter, HTTPException
+from google.api_core.exceptions import GoogleAPIError
 
-from apps.backend.app.inquiry.models import AskRequest, AskResult
+from apps.backend.app.inquiry import store
+from apps.backend.app.inquiry.models import (
+    AnswerCreate,
+    AskRequest,
+    AskResult,
+    Inquiry,
+    InquiryCreate,
+    InquiryCreated,
+    StatusUpdate,
+)
 from apps.backend.app.inquiry.pipeline import ask
 from apps.backend.app.preliminary_review.knowledge.knowledge_loader import (
     KnowledgeSearchError,
@@ -27,6 +46,29 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
+
+@contextmanager
+def _map_store_errors():
+    """store.py の例外を HTTP ステータスへ変換する（DESIGN §6・D-15）。"""
+    try:
+        yield
+    except store.InquiryNotFoundError as e:
+        raise HTTPException(status_code=404, detail=f"問い合わせが見つかりません: {e}")
+    except store.InvalidTransitionError as e:
+        raise HTTPException(
+            status_code=409,
+            detail=f"現在の状態（{e.current}）からは操作できません（要求: {e.requested}）。"
+            "画面を再読み込みして最新の状態を確認してください。",
+        )
+    except GoogleAPIError as e:
+        logger.error("Firestore 障害のため 502 で返す: %s", e)
+        raise HTTPException(
+            status_code=502,
+            detail="問い合わせデータベースにアクセスできませんでした。時間をおいて再度お試しください。",
+        )
+
+
+# ── (a) 自己解決 ─────────────────────────────────────────────────────────────
 
 @router.post("/inquiry/ask", response_model=AskResult)
 def ask_inquiry(request: AskRequest) -> AskResult:
@@ -42,3 +84,44 @@ def ask_inquiry(request: AskRequest) -> AskResult:
             status_code=502,
             detail="ナレッジ検索が実行できませんでした。時間をおいて再度お試しください。",
         )
+
+
+# ── (b) 起票管理 ─────────────────────────────────────────────────────────────
+
+@router.post("/inquiry", response_model=InquiryCreated, status_code=201)
+def create_inquiry(request: InquiryCreate) -> InquiryCreated:
+    """起票する。棄却→起票導線では self_solve_log（直前の AskResult）を添付する（§4-2）。"""
+    with _map_store_errors():
+        saved = store.create_inquiry(request)
+    return InquiryCreated(inquiry_id=saved.inquiry_id, number=saved.number)
+
+
+@router.get("/inquiry", response_model=list[Inquiry])
+def list_inquiries(requester: str | None = None) -> list[Inquiry]:
+    """一覧（updated_at 降順）。requester 指定=自分の分のみ（電力）／無指定=全件（NuRO）。"""
+    with _map_store_errors():
+        return store.list_inquiries(requester=requester)
+
+
+@router.get("/inquiry/{inquiry_id}", response_model=Inquiry)
+def get_inquiry(inquiry_id: str) -> Inquiry:
+    """詳細1件。存在しなければ 404。"""
+    with _map_store_errors():
+        return store.get_inquiry(inquiry_id)
+
+
+@router.post("/inquiry/{inquiry_id}/answer", status_code=204)
+def answer_inquiry(inquiry_id: str, request: AnswerCreate) -> None:
+    """NuRO回答を登録する（open→answered。open 以外は 409）。"""
+    with _map_store_errors():
+        store.save_answer(inquiry_id, request)
+
+
+@router.patch("/inquiry/{inquiry_id}/status", status_code=204)
+def update_inquiry_status(inquiry_id: str, request: StatusUpdate) -> None:
+    """電力側の状態遷移（answered→resolved=解決確認／answered→open=差し戻し）。
+
+    open→answered は /answer 専用（回答なしの answered を作らせない・D-15）。
+    """
+    with _map_store_errors():
+        store.update_status(inquiry_id, request.status)
