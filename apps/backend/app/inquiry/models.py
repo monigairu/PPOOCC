@@ -142,6 +142,9 @@ class InquiryCreate(BaseModel):
     category: str = Field(min_length=1)   # PoCは自由入力（例: "質問"・§4-2）
     content: str = Field(min_length=1)
     requester: str = Field(min_length=1)
+    # 起票者の電力会社名。/draft の ask() 再実行（自社フィルタ）に必要（D-17）。
+    # フロントは必ず送るが、D-17 以前の呼び出し元との後方互換のため Optional
+    utility: str | None = None
     self_solve_log: AskResult | None = None  # 起票直前のRAG応答（評価・将来(d)の入力）
 
 
@@ -186,6 +189,7 @@ class Inquiry(BaseModel):
     category: str
     content: str
     requester: str
+    utility: str | None = None               # 電力会社名（/draft 用・D-17。旧文書は無し）
     status: InquiryStatus = "open"
     created_at: datetime
     updated_at: datetime

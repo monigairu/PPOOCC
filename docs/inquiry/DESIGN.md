@@ -1,7 +1,7 @@
 # 問い合わせナレッジ対応自動化 詳細設計書
 
 作成日：2026-07-10
-最終更新：2026-07-10（初版ドラフト）
+最終更新：2026-07-14（フェーズ3完了記録・D-17（utility 永続化）追加）
 対象：`docs/inquiry/REQUIREMENTS.md` の実装設計（How）
 
 ## 本書の位置づけ（すみわけ）
@@ -281,15 +281,18 @@ def update_status(inquiry_id: str, status: InquiryStatus) -> None       # §1-3 
 }
 ```
 
-**POST `/api/inquiry`**：`{ category, content, requester, self_solve_log? }` → `201 { inquiry_id, number }`
-（`self_solve_log` は起票直前の `AskResult`。棄却→起票導線で自動添付・§4-2）
+**POST `/api/inquiry`**：`{ category, content, requester, utility?, self_solve_log? }` → `201 { inquiry_id, number }`
+（`self_solve_log` は起票直前の `AskResult`。棄却→起票導線で自動添付・§4-2。
+　`utility` は起票者の電力会社名＝`/draft` の `ask()` 再実行に必要（D-17）。フロントは必ず送る）
 **GET `/api/inquiry`**：`?requester=` で絞り込み → `Inquiry[]`（`updated_at` 降順）
 **GET `/api/inquiry/{id}`**：詳細1件 → `Inquiry`（無ければ `404`）
 **POST `/api/inquiry/{id}/answer`**：`{ content, answered_by }` → `204`（`open`→`answered`。それ以外の状態は `409`）
 **PATCH `/api/inquiry/{id}/status`**：`{ "status": "resolved" | "open" }` → `204`
 （§1-3 の電力側遷移専用：`answered`→`resolved`＝解決確認／`answered`→`open`＝差し戻し。
 　それ以外の遷移は `409`。`open`→`answered` は `/answer` のみが行う＝回答なしの answered を作らせない）
-**POST `/api/inquiry/{id}/draft`**：body なし（保存済み content で `ask()` 再実行）→ `AskResult`
+**POST `/api/inquiry/{id}/draft`**：body なし（保存済み content＋utility で `ask()` 再実行）→ `AskResult`
+（棄却ドラフトも 200 の正常系＝`related` の近傍ナレッジが NuRO の参考情報。
+　`utility` 未保存の文書（D-17 以前の起票）は `409`・検索障害は `/ask` と同じ `502`）
 
 ### 4-2. Firestore スキーマ（REQUIREMENTS §6 の「案」の確定版）
 
@@ -299,6 +302,7 @@ inquiries/{inquiry_id}
   category:      string   # "質問" 等（PoCは自由入力でよい）
   content:       string
   requester:     string   # 電力ユーザー識別子（方式は REQUIREMENTS §9-2 未確定→暫定は表示名）
+  utility:       string?  # 起票者の電力会社名（/draft の自社フィルタ用・D-17。旧文書は無し）
   status:        string   # "open" | "answered" | "resolved"（§1-3）
   created_at / updated_at: timestamp
   self_solve_log: map     # 起票直前の AskResult（棄却理由・検索ヒット。評価と将来(d)の入力）
@@ -372,6 +376,20 @@ inquiries/{inquiry_id}
   - **UI一巡（完了条件充足）**：質問（B群・棄却）→起票フォーム（プリフィル＋self_solve_log添付）→
     起票(No.0002)→NuROロールで一覧（未回答1件）→詳細で回答登録→電力ロールで解決確認→resolved。
 
+**フェーズ3（AIドラフト）完了記録（2026-07-14）**：
+- `POST /api/inquiry/{id}/draft`（§4-1）＋詳細画面の NuRO向け「AIドラフト」セクション
+  （オンデマンド生成・再生成上書き。answered=ドラフト本文＋接地スコア＋根拠レコード／
+  abstained=棄却理由＋近傍ナレッジ）を実装。前提として起票時の `utility` 永続化を D-17 で確定。
+- テスト：`test_routes.py` に draft 系6件（answered/abstained=200・404・utility無し=409・
+  検索障害/Firestore障害=502）＋`test_store.py` に utility 保存検証。inquiry 計73件パス・
+  全体回帰は既存の転記側17件失敗のみ（inquiry/事前レビューに影響なし）。
+- 実サーバE2E（`INQUIRY_FIRESTORE_COLLECTION=inquiries_e2e` で本体データと分離・検証後削除）：
+  - API：B群起票→`/draft`=棄却ドラフト保存（status=open 不変）／A群起票→`/draft`=answered
+    （接地0.94・根拠2件）保存／utility 無し旧文書=409 を確認。
+  - **UI一巡（完了条件充足）**：NuROロールで詳細→「AIドラフトを生成」→ハードネガティブ
+    （B-4型）で棄却ドラフト＋近傍ナレッジ3件表示・A群で answered ドラフト＋根拠2件＋
+    接地スコア表示・生成後はボタンが「再生成」に切替を確認。
+
 ---
 
 ## 8. 設計判断の記録
@@ -394,3 +412,4 @@ inquiries/{inquiry_id}
 | D-14 | `load_f3`／`_search` に `raise_on_error: bool = False` を追加し、inquiry からは `True` で呼ぶ（`KnowledgeSearchError` を送出）。**リランク（Ranking API）失敗は対象外**＝`raise_on_error=True` でも並べ替えスキップで検索は継続する（意図的な境界：順位劣化は「検索できなかった」ではない） | §6 の「①検索失敗=502」の実装手段。既存実装は API エラー時に空リストを返すため、そのままでは検索障害が D-7 の0件ショートカットに吸われ**偽の棄却**になる。デフォルト付きオプション引数の追加は REQUIREMENTS §0-5 の許容範囲（既定動作は不変＝事前レビュー側に影響なし） | 確定 |
 | D-15 | 状態遷移は `PATCH /{id}/status` を新設し**電力側遷移（answered→resolved／answered→open）専用**とする。open→answered は `/answer` のみ。遷移検証は store.py に集約し、違反は 409 | §1-3 の一巡（起票→回答→解決）に遷移APIが必要だが、§4-1 初版に未定義だった（フェーズ2着手時に発見・2026-07-13）。「回答なしの answered」等の矛盾状態を API 経由で作れないことをサーバ側で保証する | 確定 |
 | D-16 | フロントは `pages/inquiry/` に再編（`api.js`＋3ページ構成・§2）。ロールは PoC では画面上の「電力／NuRO」トグル＋表示名の自由入力で代替（認証は作らない） | フェーズ2で1画面→3画面（質問・一覧・詳細）になり、既存の1ファイル大画面方式（ReviewPage=1200行超）を踏襲すると保守困難。認証・ユーザー識別は REQUIREMENTS §9-2 で未確定のため、既存プラットフォーム同等の簡易運用に留め、本番移行時に `get_current_user` へ差し替える前提（routes/inquiry.py の docstring に明記済み） | 確定 |
+| D-17 | 起票時に `utility`（電力会社名）を Inquiry 文書へ保存し、`/draft` はそれで `ask()` を再実行する。未保存（D-17 以前の旧文書）は 409。ドラフト生成は起票時の自動実行ではなく**オンデマンド**（NuROが詳細画面のボタンで生成・再生成） | `/draft` は「body なしで保存済み content から再実行」（§4-1）だが、`ask()` に必須の `utility` が §4-2 初版に無かった（フェーズ3着手時に発見・2026-07-14）。identity から起票時に確実に取れる値のため保存が素直（フィールド追加は models.py の契約上可・旧文書は Optional で後方互換）。自動実行にしないのは起票の応答時間・障害を LLM に結合させないため | 確定 |

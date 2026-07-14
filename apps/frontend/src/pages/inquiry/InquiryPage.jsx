@@ -114,7 +114,7 @@ function AnswerBody({ text, citeNumOf, hoveredId, setHoveredId, onCiteClick }) {
 }
 
 // ── 起票フォーム（質問文プリフィル・self_solve_log 添付。§1-1 FILE） ────────
-function FilingSection({ question, selfSolveLog, requester, defaultOpen }) {
+function FilingSection({ question, selfSolveLog, requester, utility, defaultOpen }) {
   const navigate = useNavigate();
   const [open, setOpen] = useState(defaultOpen);
   const [category, setCategory] = useState("質問");
@@ -132,6 +132,7 @@ function FilingSection({ question, selfSolveLog, requester, defaultOpen }) {
         category: category.trim() || "質問",
         content: content.trim(),
         requester: requester.trim(),
+        utility: utility?.trim() || null,
         selfSolveLog,
       }));
     } catch (e) {
@@ -230,7 +231,7 @@ function FilingSection({ question, selfSolveLog, requester, defaultOpen }) {
 }
 
 // ── 回答カード（answered） ───────────────────────────────────────────────────
-function AnsweredCard({ result, question, requester }) {
+function AnsweredCard({ result, question, requester, utility }) {
   const [hoveredId, setHoveredId] = useState(null);
   const cardRefs = useRef({});
 
@@ -298,7 +299,7 @@ function AnsweredCard({ result, question, requester }) {
 
         {/* 自己解決しない場合の起票導線（§1-1 SELF=いいえ。折りたたみで提示） */}
         <div style={{ borderTop: `1px solid ${C.border}`, paddingTop: "12px", display: "flex", flexDirection: "column" }}>
-          <FilingSection question={question} selfSolveLog={result} requester={requester} defaultOpen={false} />
+          <FilingSection question={question} selfSolveLog={result} requester={requester} utility={utility} defaultOpen={false} />
         </div>
       </div>
     </div>
@@ -306,7 +307,7 @@ function AnsweredCard({ result, question, requester }) {
 }
 
 // ── 棄却カード（abstained・正常系） ──────────────────────────────────────────
-function AbstainedCard({ result, question, requester }) {
+function AbstainedCard({ result, question, requester, utility }) {
   const info = ABSTAIN_INFO[result.abstain_reason] || ABSTAIN_INFO.insufficient_context;
   return (
     <div style={{ background: C.surface, border: `1px solid ${C.warning}`, borderRadius: "10px", overflow: "hidden" }}>
@@ -317,7 +318,7 @@ function AbstainedCard({ result, question, requester }) {
         <div style={{ fontSize: "12.5px", color: C.textMuted, lineHeight: 1.85 }}>{info.desc}</div>
 
         {/* 棄却時は起票フォームを開いた状態で提示（§1-1 ABS→FILE） */}
-        <FilingSection question={question} selfSolveLog={result} requester={requester} defaultOpen />
+        <FilingSection question={question} selfSolveLog={result} requester={requester} utility={utility} defaultOpen />
 
         {result.related.length > 0 && (
           <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
@@ -464,10 +465,10 @@ export default function InquiryPage() {
           {entry.status === "loading" && <LoadingCard startedAt={entry.startedAt} />}
           {entry.status === "error" && <ErrorCard message={entry.error} />}
           {entry.status === "done" && entry.result.status === "answered" && (
-            <AnsweredCard result={entry.result} question={entry.question} requester={identity.displayName} />
+            <AnsweredCard result={entry.result} question={entry.question} requester={identity.displayName} utility={identity.utility} />
           )}
           {entry.status === "done" && entry.result.status === "abstained" && (
-            <AbstainedCard result={entry.result} question={entry.question} requester={identity.displayName} />
+            <AbstainedCard result={entry.result} question={entry.question} requester={identity.displayName} utility={identity.utility} />
           )}
         </div>
       ))}

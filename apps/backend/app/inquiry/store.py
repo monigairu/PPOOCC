@@ -95,6 +95,7 @@ def create_inquiry(inquiry: InquiryCreate) -> Inquiry:
             category=inquiry.category,
             content=inquiry.content,
             requester=inquiry.requester,
+            utility=inquiry.utility,
             status="open",
             created_at=now,
             updated_at=now,

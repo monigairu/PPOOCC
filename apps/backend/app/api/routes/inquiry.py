@@ -8,7 +8,9 @@
     GET   /api/inquiry/{id}              - 詳細
     POST  /api/inquiry/{id}/answer       - NuRO回答登録（open→answered）
     PATCH /api/inquiry/{id}/status       - 電力側遷移（answered→resolved／answered→open・D-15）
-(c) AIドラフト（/draft）はフェーズ3。
+(c) AIドラフト（フェーズ3）:
+    POST  /api/inquiry/{id}/draft        - 保存済み content＋utility で ask() を再実行し
+                                           ai_draft に保存（再生成で上書き・D-17）
 
 エラー方針（DESIGN §6）：
     棄却（abstained）は正常系＝200 で返し、起票導線に流す。
@@ -125,3 +127,33 @@ def update_inquiry_status(inquiry_id: str, request: StatusUpdate) -> None:
     """
     with _map_store_errors():
         store.update_status(inquiry_id, request.status)
+
+
+# ── (c) AIドラフト ───────────────────────────────────────────────────────────
+
+@router.post("/inquiry/{inquiry_id}/draft", response_model=AskResult)
+def generate_draft(inquiry_id: str) -> AskResult:
+    """保存済みの問い合わせ内容で ask() を再実行し、AIドラフトとして保存・返却する。
+
+    棄却ドラフトも 200 の正常系（related の近傍ナレッジが NuRO の参考情報・§3-3）。
+    utility 未保存の文書（D-17 以前の起票）は 409＝再起票を促す。
+    """
+    with _map_store_errors():
+        inquiry = store.get_inquiry(inquiry_id)
+    if inquiry.utility is None:
+        raise HTTPException(
+            status_code=409,
+            detail="起票時の電力会社情報が無いためドラフトを生成できません。"
+            "お手数ですが質問画面から再起票してください。",
+        )
+    try:
+        draft = ask(inquiry.content, inquiry.utility)
+    except KnowledgeSearchError as e:
+        logger.error("ナレッジ検索障害のため /draft を 502 で返す: %s", e)
+        raise HTTPException(
+            status_code=502,
+            detail="ナレッジ検索が実行できませんでした。時間をおいて再度お試しください。",
+        )
+    with _map_store_errors():
+        store.save_draft(inquiry_id, draft)
+    return draft

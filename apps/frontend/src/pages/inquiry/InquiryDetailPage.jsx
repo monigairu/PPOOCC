@@ -6,11 +6,12 @@
  *     起票時の自己解決記録（self_solve_log）を回答の参考として表示。
  *   - 電力ユーザー：status=answered のとき「解決した」（→resolved）または
  *     「解決しない（差し戻し）」（→open）。
- * AIドラフト（ai_draft）の生成・表示はフェーズ3。
+ *   - AIドラフト（ai_draft・フェーズ3）：NuROが「生成」ボタンで ask() を再実行し、
+ *     ドラフト＋根拠（棄却時は近傍ナレッジ）を回答の参考として表示（自動送信はしない・§3-3）。
  */
 import { useCallback, useEffect, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
-import { getInquiry, submitAnswer, updateStatus } from "./api.js";
+import { generateDraft, getInquiry, submitAnswer, updateStatus } from "./api.js";
 import {
   ABSTAIN_INFO, C, ErrorCard, EvidenceCard, InquiryShell, Spinner, StatusBadge,
   formatTimestamp, useIdentity,
@@ -58,6 +59,93 @@ function SelfSolveLog({ log }) {
           {relatedEvidences.map((ev, i) => <EvidenceCard key={i} ev={ev} />)}
         </div>
       )}
+    </SectionCard>
+  );
+}
+
+// AIドラフト（(c)・フェーズ3）：NuROの回答参考。生成はオンデマンド・再生成で上書き（D-17）
+function AiDraftSection({ inquiryId, draft, onGenerated }) {
+  const [generating, setGenerating] = useState(false);
+  const [error, setError] = useState(null);
+
+  const handleGenerate = async () => {
+    if (generating) return;
+    setGenerating(true);
+    setError(null);
+    try {
+      await generateDraft(inquiryId);
+      onGenerated(); // 詳細を再読込して保存済み ai_draft を表示
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setGenerating(false);
+    }
+  };
+
+  const abstainInfo =
+    draft?.status === "abstained" ? ABSTAIN_INFO[draft.abstain_reason] || ABSTAIN_INFO.insufficient_context : null;
+  const draftEvidences = draft?.status === "abstained" ? draft.related : draft?.evidences;
+
+  return (
+    <SectionCard title="AIドラフト — 回答の参考（自動送信はされません）" accent={C.accent}>
+      {!draft && (
+        <div style={{ fontSize: "12px", color: C.textMuted, lineHeight: 1.8 }}>
+          問い合わせ内容でナレッジを再検索し、回答ドラフトまたは関連する近傍ナレッジを生成できます。
+        </div>
+      )}
+
+      {draft?.status === "answered" && (
+        <>
+          <div style={{
+            padding: "10px 14px", borderRadius: "6px", background: "rgba(255,255,255,0.02)",
+            border: `1px solid ${C.border}`, fontSize: "12.5px", color: C.text,
+            lineHeight: 1.9, whiteSpace: "pre-wrap", wordBreak: "break-word",
+          }}>
+            {draft.answer}
+          </div>
+          {draft.grounding_score != null && (
+            <div style={{ fontSize: "11px", color: C.textMuted }}>
+              接地スコア：{draft.grounding_score.toFixed(2)}（根拠レコードに支持される度合い）
+            </div>
+          )}
+        </>
+      )}
+
+      {abstainInfo && (
+        <div style={{ fontSize: "12px", color: C.textMuted, lineHeight: 1.8 }}>
+          ⚠ {abstainInfo.title} — ナレッジからドラフトを作成できませんでした。
+          下記の近傍ナレッジを参考に回答を作成してください。
+        </div>
+      )}
+
+      {draftEvidences?.length > 0 && (
+        <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
+          <div style={{ fontSize: "11px", fontWeight: 700, color: C.textMuted }}>
+            {draft.status === "abstained"
+              ? "検索でヒットした近傍ナレッジ（回答ではありません）"
+              : "ドラフトの根拠レコード"}
+          </div>
+          {draftEvidences.map((ev, i) => <EvidenceCard key={i} ev={ev} />)}
+        </div>
+      )}
+
+      {error && <ErrorCard message={error} />}
+      <button
+        onClick={handleGenerate}
+        disabled={generating}
+        style={{
+          alignSelf: "flex-start", padding: "8px 20px", borderRadius: "6px",
+          border: `1px solid ${C.accent}`, background: "transparent",
+          color: generating ? C.textDim : C.accent,
+          fontSize: "12px", fontWeight: 700, fontFamily: "inherit",
+          cursor: generating ? "not-allowed" : "pointer",
+          display: "flex", alignItems: "center", gap: "8px",
+        }}
+      >
+        {generating
+          ? <><Spinner size={12} />生成中...（ナレッジを検索しています）</>
+          : draft ? "↻ ドラフトを再生成する" : "✨ AIドラフトを生成する"}
+      </button>
     </SectionCard>
   );
 }
@@ -259,7 +347,14 @@ export default function InquiryDetailPage() {
             <span style={{ fontSize: "11px", color: C.success }}>✓ この問い合わせは解決済みです</span>
           )}
 
-          {/* 起票時のAI検索記録（NuROの回答参考。フェーズ3で ai_draft がここに加わる） */}
+          {/* NuROの回答参考：AIドラフト（オンデマンド生成）＋起票時のAI検索記録 */}
+          {isNuro && (
+            <AiDraftSection
+              inquiryId={inquiry.inquiry_id}
+              draft={inquiry.ai_draft}
+              onGenerated={reload}
+            />
+          )}
           {isNuro && <SelfSolveLog log={inquiry.self_solve_log} />}
         </>
       )}
