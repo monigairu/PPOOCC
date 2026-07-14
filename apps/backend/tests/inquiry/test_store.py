@@ -98,12 +98,13 @@ _ABSTAINED = AskResult(status="abstained", abstain_reason="insufficient_context"
 
 class TestCreateInquiry:
     def test_create_persists_open_inquiry(self, fake_db):
-        """起票直後は status=open・入力値と self_solve_log が保存される（§4-2）"""
-        inquiry_id = _create(self_solve_log=_ABSTAINED)
+        """起票直後は status=open・入力値と self_solve_log・utility が保存される（§4-2・D-17）"""
+        inquiry_id = _create(self_solve_log=_ABSTAINED, utility="関東電力")
         saved = store.get_inquiry(inquiry_id)
         assert saved.inquiry_id == inquiry_id
         assert saved.status == "open"
         assert saved.requester == "関東電力 太郎"
+        assert saved.utility == "関東電力"
         assert saved.self_solve_log.abstain_reason == "insufficient_context"
         assert saved.answer is None and saved.ai_draft is None
 

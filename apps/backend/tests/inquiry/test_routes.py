@@ -202,6 +202,81 @@ class TestAnswerEndpoint:
         assert res.status_code == 422
 
 
+# ── (c) AIドラフト（フェーズ3）──────────────────────────────────────────────
+
+# D-17 以降の起票＝utility 保存済み（/draft はこれで ask() を再実行する）
+_INQUIRY_WITH_UTILITY = _INQUIRY.model_copy(update={"utility": "関東電力"})
+
+_ASK = "apps.backend.app.api.routes.inquiry.ask"
+
+
+class TestDraftEndpoint:
+    def test_draft_answered_saves_and_returns_result(self):
+        """保存済み content＋utility で ask() を再実行し、結果を保存して返す（§4-1・D-17）"""
+        with (
+            patch(f"{_STORE}.get_inquiry", return_value=_INQUIRY_WITH_UTILITY),
+            patch(_ASK, return_value=_ANSWERED) as ask_mock,
+            patch(f"{_STORE}.save_draft") as save,
+        ):
+            res = client.post("/api/inquiry/abc123/draft")
+        assert res.status_code == 200
+        assert res.json()["status"] == "answered"
+        assert res.json()["evidences"][0]["record_id"] == "03_KT_1G_01_0004"
+        assert ask_mock.call_args.args == (_INQUIRY.content, "関東電力")
+        assert save.call_args.args == ("abc123", _ANSWERED)
+
+    def test_draft_abstained_is_200_with_related(self):
+        """棄却ドラフトも正常系＝200（related が NuRO の参考情報・§3-3）"""
+        with (
+            patch(f"{_STORE}.get_inquiry", return_value=_INQUIRY_WITH_UTILITY),
+            patch(_ASK, return_value=_ABSTAINED),
+            patch(f"{_STORE}.save_draft") as save,
+        ):
+            res = client.post("/api/inquiry/abc123/draft")
+        assert res.status_code == 200
+        assert res.json()["status"] == "abstained"
+        assert res.json()["related"][0]["record_id"] == "03_KT_1G_02_0005"
+        assert save.call_args.args == ("abc123", _ABSTAINED)
+
+    def test_draft_missing_inquiry_is_404(self):
+        with patch(f"{_STORE}.get_inquiry", side_effect=InquiryNotFoundError("x")):
+            res = client.post("/api/inquiry/no-such-id/draft")
+        assert res.status_code == 404
+
+    def test_draft_without_utility_is_409(self):
+        """utility 未保存（D-17 以前の旧文書）は 409＝再起票を促す"""
+        with (
+            patch(f"{_STORE}.get_inquiry", return_value=_INQUIRY),  # utility=None
+            patch(_ASK) as ask_mock,
+        ):
+            res = client.post("/api/inquiry/abc123/draft")
+        assert res.status_code == 409
+        assert "電力会社情報" in res.json()["detail"]
+        ask_mock.assert_not_called()
+
+    def test_draft_search_failure_is_502(self):
+        """①検索障害は /ask と同じ 502（DESIGN §6/D-14）"""
+        with (
+            patch(f"{_STORE}.get_inquiry", return_value=_INQUIRY_WITH_UTILITY),
+            patch(_ASK, side_effect=KnowledgeSearchError("Vertex AI Search エラー")),
+            patch(f"{_STORE}.save_draft") as save,
+        ):
+            res = client.post("/api/inquiry/abc123/draft")
+        assert res.status_code == 502
+        assert "ナレッジ検索" in res.json()["detail"]
+        save.assert_not_called()
+
+    def test_draft_firestore_outage_is_502(self):
+        """保存失敗は 502（ドラフト消失を隠さない・DESIGN §6）"""
+        with (
+            patch(f"{_STORE}.get_inquiry", return_value=_INQUIRY_WITH_UTILITY),
+            patch(_ASK, return_value=_ANSWERED),
+            patch(f"{_STORE}.save_draft", side_effect=GoogleAPIError("unavailable")),
+        ):
+            res = client.post("/api/inquiry/abc123/draft")
+        assert res.status_code == 502
+
+
 class TestStatusEndpoint:
     def test_resolve_returns_204(self):
         with patch(f"{_STORE}.update_status") as update:

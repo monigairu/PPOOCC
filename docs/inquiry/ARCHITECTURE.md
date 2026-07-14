@@ -1,6 +1,6 @@
 # 問い合わせナレッジ対応自動化 アーキテクチャ
 
-> **最終更新：2026-07-13**（**フェーズ1完了**：パイプライン①〜④＋`/ask`＋最小UI実装済み・ミニ評価でB群誤答0件）
+> **最終更新：2026-07-14**（**フェーズ3完了**：`/draft`＋NuRO向けAIドラフト表示。フェーズ1・2も完了済み・残りはフェーズ4評価ハーネス）
 
 本書は問い合わせ機能の「**システムがどういう構造か**」の地図（静的構造・再利用境界・データの置き場）。
 処理フロー・関数I/F・APIスキーマの詳細（動的な振る舞い）は [`DESIGN.md`](DESIGN.md) が正本であり、本書では繰り返さない。
@@ -165,9 +165,9 @@ flowchart LR
 - 棄却（正常系）とシステム障害（エラー）は混同しない：検索失敗は502、ゲート失敗は棄却に倒す（DESIGN §6）。
 - ①検索が0件なら②をスキップして即棄却（Step 0 実測でB群の大半が検索0件・DESIGN D-7）。
 
-## 6. 実装状況マップ（2026-07-13 時点）
+## 6. 実装状況マップ（2026-07-14 時点）
 
-フェーズ計画は DESIGN §7。現在は**フェーズ1（コアパイプライン）完了**。次はフェーズ2（起票管理）。
+フェーズ計画は DESIGN §7。現在は**フェーズ3（AIドラフト）まで完了**。次はフェーズ4（評価ハーネス）。
 
 | コンポーネント | 状態 | 備考 |
 |---|---|---|
@@ -176,8 +176,8 @@ flowchart LR
 | `inquiry/models.py` | ✅ 実装済（Step 1） | AskResult / Evidence 等。status⇔フィールド整合を Pydantic バリデータで強制 |
 | `inquiry/pipeline.py`・`sufficiency.py`・`generation.py`・`grounding.py` | ✅ 実装済（Step 2） | ③は自前生成＝Answer API 不採用（D-2）・文体は条件平叙文（D-13）・検索障害は KnowledgeSearchError 送出（D-14）。ミニ評価：B群誤答0/6・A群5/5（DESIGN §7） |
 | `api/routes/inquiry.py`（`/ask`）＋最小UI | ✅ 実装済（Step 3） | 棄却=200・検索障害=502（§6）。UIは `/inquiry`（InquiryPage.jsx）＝質問→回答/棄却表示・起票ボタンはフェーズ2まで無効表示。実サーバE2Eで回答・棄却・422を確認 |
-| `inquiry/store.py`＋起票CRUD＋一覧UI | ⬜ フェーズ2 | Firestore `inquiries` |
-| `/draft`＋NuRO向け表示 | ⬜ フェーズ3 | `ask()` 再利用 |
+| `inquiry/store.py`＋起票CRUD＋一覧UI | ✅ 実装済（フェーズ2） | Firestore `inquiries`。エンドポイント5本＋UI3画面（`pages/inquiry/` 再編・D-16）・状態遷移は store に集約（D-15）。起票→回答→解決のUI一巡を実サーバE2Eで確認 |
+| `/draft`＋NuRO向け表示 | ✅ 実装済（フェーズ3） | `ask()` 再利用（起票時に保存した utility で再実行・D-17）。詳細画面でオンデマンド生成・answered=ドラフト＋根拠／abstained=近傍ナレッジ表示を実サーバE2Eで確認 |
 | `scripts/inquiry/eval_inquiry.py` | ⬜ フェーズ4 | REQUIREMENTS §8 の4指標・閾値較正 |
 
 - 各フェーズ完了時に `uv run pytest` で事前レビュー側の回帰が無いことを確認する（DESIGN §7）。

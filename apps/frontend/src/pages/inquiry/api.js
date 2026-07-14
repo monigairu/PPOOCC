@@ -42,11 +42,15 @@ async function request(path, { method = "GET", body } = {}) {
 export const askQuestion = (question, utility) =>
   request("/inquiry/ask", { method: "POST", body: { question, utility } });
 
-/** (b) 起票（POST /api/inquiry）→ { inquiry_id, number } */
-export const createInquiry = ({ category, content, requester, selfSolveLog }) =>
+/** (b) 起票（POST /api/inquiry）→ { inquiry_id, number }。utility は /draft の再実行に必要（D-17） */
+export const createInquiry = ({ category, content, requester, utility, selfSolveLog }) =>
   request("/inquiry", {
     method: "POST",
-    body: { category, content, requester, self_solve_log: selfSolveLog ?? null },
+    body: {
+      category, content, requester,
+      utility: utility ?? null,
+      self_solve_log: selfSolveLog ?? null,
+    },
   });
 
 /** (b) 一覧。requester 指定=自分の分のみ（電力）／未指定=全件（NuRO） */
@@ -70,3 +74,7 @@ export const updateStatus = (inquiryId, status) =>
     method: "PATCH",
     body: { status },
   });
+
+/** (c) AIドラフト生成（POST /api/inquiry/{id}/draft・再生成で上書き）→ AskResult */
+export const generateDraft = (inquiryId) =>
+  request(`/inquiry/${encodeURIComponent(inquiryId)}/draft`, { method: "POST" });
