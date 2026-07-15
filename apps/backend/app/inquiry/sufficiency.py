@@ -13,8 +13,9 @@ from apps.backend.app.inquiry.models import SufficiencyResult
 logger = logging.getLogger(__name__)
 
 # message_direction（実データ語彙 nuro/denryoku・D-11）のLLM向け表示。
-# 未知値はそのまま見せる（判定を止めない）。
-_DIRECTION_LABELS = {"nuro": "NuRO確認", "denryoku": "電力回答"}
+# 未知値はそのまま見せる（判定を止めない）。②③のプロンプトと④の fact 結合（D-20）で共用
+DIRECTION_LABELS = {"nuro": "NuRO確認", "denryoku": "電力回答"}
+_DIRECTION_LABELS = DIRECTION_LABELS  # 後方互換の別名
 
 
 def render_records(records: list[dict]) -> str:

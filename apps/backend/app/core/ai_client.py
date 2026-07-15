@@ -304,7 +304,7 @@ def call_gemini(prompt, model_name: str | None = None, system_instruction: str =
         config=config,
     )
     if response.text is None:
-        finish = _extract_finish_reason(response)
+        finish = getattr(getattr(response, "candidates", [None])[0], "finish_reason", None)
         raise RuntimeError(
             f"Gemini call returned empty text (model={effective_model}, finish_reason={finish})"
         )
