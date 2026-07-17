@@ -57,6 +57,20 @@ TARGET_CORRECT = 0.80    # 正答率（A群）
 TARGET_CITATION = 0.90   # 引用正確性（A群）
 TARGET_ABSTAIN = 0.90    # 棄却率（B群）
 
+# 検証マトリクスの難易度ラベル（qa_cases.yaml の search_level / gen_level に対応。
+# 報告スライド「検索精度×回答品質」のセル単位で集計する）
+SEARCH_LEVELS = {
+    1: "質問がナレッジと同じ語彙 → 正解が上位にヒット",
+    2: "同義語・表記揺れで語彙が一致しない → それでもヒット",
+    3: "ナレッジ件数が少ない話題 → 埋もれずヒット",
+}
+GEN_LEVELS = {
+    1: "単一レコードで完結する質問に正しく回答",
+    2: "複数レコードの統合が必要な質問に正しく回答",
+    3: "類似ヒットの中から必要な情報のみ選別して回答",
+    4: "正しいデータがヒットしない際に誤答を生成しない",
+}
+
 
 def _snip(text, width: int = 70) -> str:
     s = str(text or "").replace("\n", " ").strip()
@@ -82,6 +96,7 @@ def eval_retrieval_a(case: dict, hits: list[dict]) -> dict:
     ranks = [i + 1 for i, h in enumerate(hits) if h.get("id") in expected]
     return {
         "case": case["id"],
+        "search_level": case.get("search_level"),
         "hits": len(hits),
         "best_rank": ranks[0] if ranks else None,   # 正解群の最良順位（None=圏外）
         "found": len({h.get("id") for h in hits} & expected),
@@ -236,7 +251,7 @@ def main() -> None:
         for case in a_cases:
             obs = run_ask_case(case, utility)
             ok, detail = judge_a(case, obs)
-            obs.update(run=run, group="A", ok=ok)
+            obs.update(run=run, group="A", ok=ok, gen_level=case.get("gen_level"))
             report["e2e"].append(obs)
             a_correct += ok
             times.append(obs["elapsed_sec"])
@@ -252,7 +267,8 @@ def main() -> None:
         for case in b_cases:
             obs = run_ask_case(case, utility)
             ok, detail = judge_b(obs)
-            obs.update(run=run, group="B", ok=ok, subcategory=_subcategory(case))
+            obs.update(run=run, group="B", ok=ok, subcategory=_subcategory(case),
+                       gen_level=4)  # B群＝「答えが無いとき誤答しない」のセル
             report["e2e"].append(obs)
             b_abstained += ok
             b_wrong += not ok
@@ -297,6 +313,27 @@ def main() -> None:
     if times:
         print(f"  応答時間: 平均 {sum(times) / len(times):.1f}s / 最大 {max(times):.1f}s（目標値は §9-6 未確定）")
     print(f"  自社フィルタ（軸①）: {'混入なし' if filter_ok else '他社レコード混入あり（FAIL）'}")
+
+    # ── 検証マトリクス（報告スライドのセル単位・qa_cases.yaml の難易度タグで集計） ──
+    print("\n=== 検証マトリクス（難易度別） ===")
+    print("  軸① ナレッジ検索精度:")
+    for lv, label in SEARCH_LEVELS.items():
+        rows = [r for r in report["retrieval"] if r.get("search_level") == lv]
+        if not rows:
+            continue
+        n_ok = sum(1 for r in rows if r["best_rank"])
+        detail = " ".join(f"{r['case']}={'○' if r['best_rank'] else '×'}" for r in rows)
+        print(f"    [{'PASS' if n_ok == len(rows) else 'FAIL'}] 難易度{lv}"
+              f"（{label}）: {_pct(n_ok, len(rows))}  {detail}")
+    print("  軸② 回答の品質:")
+    for lv, label in GEN_LEVELS.items():
+        rows = [o for o in report["e2e"] if o.get("gen_level") == lv]
+        if not rows:
+            continue
+        n_ok = sum(1 for o in rows if o["ok"])
+        detail = " ".join(f"{o['case']}={'○' if o['ok'] else '×'}" for o in rows)
+        print(f"    [{'PASS' if n_ok == len(rows) else 'FAIL'}] 難易度{lv}"
+              f"（{label}）: {_pct(n_ok, len(rows))}  {detail}")
 
     if args.json:
         Path(args.json).write_text(

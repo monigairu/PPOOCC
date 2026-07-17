@@ -35,6 +35,25 @@ _FACT_TEXT_MAX_CHARS = 4000
 # 「。」の直後に空白・改行が続かない箇所（＝文分割が失敗する箇所・D-20）
 _SENTENCE_BOUNDARY_PATTERN = re.compile(r"。(?=[^\s])")
 
+# 案件メタ行として fact に足す案件属性（D-22）。質問はレコード本文でなく
+# 案件属性（費目・工事名等）の語彙で書かれることが多く、回答1文目が質問の
+# 話題語をなぞると本文だけの fact では支持なしと判定される
+# （A-8 実測：「維持管理費の定期点検について、〜」が 0.22→メタ行付与で 0.98）。
+# 値が空・「－」（事務連絡等）の属性は行に含めない。
+_CASE_META_FIELDS = (
+    ("費目", "cost_category"),
+    ("工事名", "construction_name"),
+    ("提出タイミング", "submission_timing"),
+)
+
+# 文頭の接続詞（実測で主張の含意判定を壊す・D-21）。
+# 「また、〜が求められます」は fact にほぼ同文があっても支持なしと判定され
+# score が 0.63→0.86 に変わることをプローブで確認済み。除去しても主張の
+# 内容は変わらないため、検査入力からのみ機械的に取り除く（表示は不変）。
+_LEADING_CONNECTIVE_PATTERN = re.compile(
+    r"^[ \t]*(?:また|さらに|なお|加えて|そのほか|その他)、", re.MULTILINE
+)
+
 _grounding_client: discoveryengine.GroundedGenerationServiceClient | None = None
 
 
@@ -53,7 +72,28 @@ def _normalize_for_claims(answer: str) -> str:
     表示用の回答本文（AskResult.answer）には手を入れない。
     """
     plain = EVIDENCE_TAG_PATTERN.sub("", answer).strip()
-    return _SENTENCE_BOUNDARY_PATTERN.sub("。\n", plain)
+    plain = _SENTENCE_BOUNDARY_PATTERN.sub("。\n", plain)
+    return _LEADING_CONNECTIVE_PATTERN.sub("", plain)
+
+
+def _case_meta_line(message: dict) -> str:
+    """案件メタ行（費目・工事名・提出タイミング・対象）を組み立てる（D-22）。
+
+    案件レベルの属性は同一案件の全メッセージで共通のため、代表1件から取る。
+    属性が何も無い（すべて空・「－」）場合は空文字＝メタ行なし。
+    """
+    parts = []
+    for label, key in _CASE_META_FIELDS:
+        value = str(message.get(key, "") or "").strip()
+        if value and value != "－":
+            parts.append(f"{label}={value}")
+    target = "".join(
+        str(message.get(key, "") or "").strip().replace("－", "")
+        for key in ("plant_site", "plant_unit")
+    )
+    if target:
+        parts.append(f"対象={target}")
+    return "案件: " + "・".join(parts) if parts else ""
 
 
 def _build_case_facts(records: list[dict]) -> list[discoveryengine.GroundingFact]:
@@ -62,6 +102,8 @@ def _build_case_facts(records: list[dict]) -> list[discoveryengine.GroundingFact
     fact を1メッセージ単位にすると会話をまたぐ関係が検証できないため、
     ②③に渡している文脈単位（案件＝D-19）と揃える。案件内はメッセージID
     （_doc_id="{id}_{seq}"）順＝時系列に並べ、種別ラベルで発話者を明示する。
+    先頭に案件メタ行（D-22）を置き、質問の話題語（費目・工事名）をなぞった
+    回答文が本文に無い語彙のせいで支持なしにならないようにする。
     """
     by_case: dict[str, list[dict]] = {}
     for r in records:
@@ -70,6 +112,9 @@ def _build_case_facts(records: list[dict]) -> list[discoveryengine.GroundingFact
     facts = []
     for case_id, messages in by_case.items():
         lines = []
+        meta = _case_meta_line(messages[0])
+        if meta:
+            lines.append(meta)
         for m in sorted(messages, key=lambda x: str(x.get("_doc_id", ""))):
             direction = str(m.get("message_direction", ""))
             label = DIRECTION_LABELS.get(direction, direction)
